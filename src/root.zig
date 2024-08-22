@@ -1,6 +1,25 @@
 const std = @import("std");
+const root = @import("root.zig");
+const rl = @import("raylib");
 const Complex = std.math.Complex;
 const testing = std.testing;
+
+const samplesize = std.math.pow(u64, 2, 14);
+
+pub var global_plug_state: *PlugState = undefined;
+
+pub const PlugState = struct {
+    allocator: *std.mem.Allocator,
+    samples: [samplesize]f32 = [1]f32{0.0} ** samplesize,
+    complex_samples: [samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** samplesize,
+    complex_amplitudes: [samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** samplesize,
+    amplitudes: [samplesize]f32 = [1]f32{0.0} ** samplesize,
+    max_amplitude: f32 = 0,
+    samples_writer: u64 = 0,
+    music: rl.Music,
+    canHotReload: bool = false,
+    isHotReloading: bool = false,
+};
 
 pub const FT = struct {
     pub fn FFT(allocator: std.mem.Allocator, input: []Complex(f32)) ![]Complex(f32) {
@@ -51,9 +70,7 @@ pub const FT = struct {
         }
     }
 
-    pub fn DFT(allocator: std.mem.Allocator, input: []Complex(f32)) !([]Complex(f32)) {
-        var amplitudes = try allocator.alloc(Complex(f32), input.len);
-
+    pub fn NoAllocDFT(amplitudes: []Complex(f32), input: []Complex(f32)) void {
         const time_base = @as(f32, 1.0 / @as(f32, @floatFromInt(input.len)));
 
         for (0..input.len) |frequency| {
@@ -67,6 +84,12 @@ pub const FT = struct {
                 amplitudes[frequency] = amplitudes[frequency].add(std.math.complex.exp(Complex(f32).init(0, std.math.pi * 2 * time * frequency_f)).mul(sample));
             }
         }
+    }
+
+    pub fn DFT(allocator: std.mem.Allocator, input: []Complex(f32)) !([]Complex(f32)) {
+        const amplitudes = try allocator.alloc(Complex(f32), input.len);
+
+        NoAllocDFT(amplitudes, input);
 
         return amplitudes;
     }
