@@ -4,32 +4,27 @@ const rl = @import("raylib");
 const Complex = std.math.Complex;
 const testing = std.testing;
 
-const samplesize = std.math.pow(u64, 2, 14);
+fn bitSwap(x: usize, bits: usize) usize {
+    var result: usize = 0;
+    for (0..bits) |i| {
+        const shift: u6 = @intCast(i);
+        const bit = (x >> shift) & 1;
+        const opposite_shift: u6 = @intCast(bits - 1 - i);
+        result |= (bit << opposite_shift);
+    }
 
-pub var global_plug_state: *PlugState = undefined;
+    return result;
+}
 
-pub const PlugState = struct {
-    allocator: *std.mem.Allocator,
-    samples: [samplesize]f32 = [1]f32{0.0} ** samplesize,
-    complex_samples: [samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** samplesize,
-    complex_amplitudes: [samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** samplesize,
-    amplitudes: [samplesize]f32 = [1]f32{0.0} ** samplesize,
-    max_amplitude: f32 = 0,
-    samples_writer: u64 = 0,
-    music: rl.Music,
-    canHotReload: bool = false,
-    isHotReloading: bool = false,
-};
+inline fn bitCount(size: usize) usize {
+    return std.math.log2(size);
+}
 
 pub const FT = struct {
     pub fn FFT(allocator: std.mem.Allocator, input: []Complex(f32)) ![]Complex(f32) {
-        var output = try allocator.alloc(Complex(f32), input.len);
+        const output = try allocator.alloc(Complex(f32), input.len);
 
-        for (0..input.len) |i| {
-            output[i] = input[i];
-        }
-
-        _FFT(input, 1, output, input.len);
+        NoAllocFFT(output, input);
 
         return output;
     }
@@ -39,49 +34,57 @@ pub const FT = struct {
             output[i] = input[i];
         }
 
-        _FFT(input, 1, output, input.len);
+        _FFT(output);
     }
 
-    fn _FFT(input: []Complex(f32), stride: u32, output: []Complex(f32), size: usize) void {
-        if (size <= 1) {
-            output[0] = input[0];
-            return;
+    fn _FFT(data: []Complex(f32)) void {
+        const size = data.len;
+        const bits: usize = bitCount(size);
+
+        for (0..size) |i| {
+            const j: usize = bitSwap(i, bits);
+
+            if (i < j) {
+                const temp = data[j];
+                data[j] = data[i];
+                data[i] = temp;
+            }
         }
 
-        _FFT(input, stride * 2, output, size / 2);
+        var s: usize = 1;
+        while (s <= bits) : (s += 1) {
+            const m = @as(usize, 1) << @intCast(s);
+            const m_half = m / 2;
+            const wlen = std.math.complex.exp(Complex(f32).init(0, -2 * std.math.pi / @as(f32, @floatFromInt(m))));
 
-        var odd_input = input;
-        odd_input.ptr = input.ptr + stride;
-        odd_input.len = input.len - stride;
+            var k: usize = 0;
+            while (k < size) : (k += m) {
+                var w = Complex(f32).init(1, 0);
 
-        var odd_output = output;
-        odd_output.ptr = output.ptr + size / 2;
-        odd_output.len = output.len - size / 2;
-        _FFT(odd_input, stride * 2, odd_output, size / 2);
-
-        var k: u32 = 0;
-        while (k < size / 2) : (k += 1) {
-            const t: f32 = @as(f32, @floatFromInt(k)) / @as(f32, @floatFromInt(size));
-            const v = std.math.complex.exp(Complex(f32).init(0, 2 * std.math.pi * t)).mul(output[k + size / 2]);
-            const e = output[k];
-
-            output[k] = e.add(v);
-            output[k + size / 2] = e.sub(v);
+                var j: usize = 0;
+                while (j < m_half) : (j += 1) {
+                    const u = data[k + j];
+                    const v = data[k + j + m_half].mul(w);
+                    data[k + j] = u.add(v);
+                    data[k + j + m_half] = u.sub(v);
+                    w = w.mul(wlen);
+                }
+            }
         }
     }
 
     pub fn NoAllocDFT(amplitudes: []Complex(f32), input: []Complex(f32)) void {
-        const time_base = @as(f32, 1.0 / @as(f32, @floatFromInt(input.len)));
+        const size_float = @as(f32, @floatFromInt(amplitudes.len));
 
-        for (0..input.len) |frequency| {
-            amplitudes[frequency] = Complex(f32).init(0, 0);
+        for (0..input.len) |k| {
+            const k_float: f32 = @floatFromInt(k);
+            amplitudes[k] = Complex(f32).init(0, 0);
 
-            const frequency_f = @as(f32, @floatFromInt(frequency));
+            for (0..input.len) |t| {
+                const t_float: f32 = @floatFromInt(t);
+                const angle = std.math.complex.exp(Complex(f32).init(0, -2 * std.math.pi * k_float * t_float / size_float));
 
-            for (input, 0..) |sample, i| {
-                const time = time_base * @as(f32, @floatFromInt(i));
-
-                amplitudes[frequency] = amplitudes[frequency].add(std.math.complex.exp(Complex(f32).init(0, std.math.pi * 2 * time * frequency_f)).mul(sample));
+                amplitudes[k] = amplitudes[k].add(input[t].mul(angle));
             }
         }
     }
@@ -114,17 +117,24 @@ test "testing fast fourier implementation" {
     const wave = try GenerateComplexTestWave(testalloc, 16);
     defer testalloc.free(wave);
 
-    const amplitudes = try FT.DFT(testalloc, wave);
-    defer testalloc.free(amplitudes);
+    const DFTamplitudes = try FT.DFT(testalloc, wave);
+    defer testalloc.free(DFTamplitudes);
 
-    for (amplitudes, 0..) |amplitude, i| {
+    for (DFTamplitudes, 0..) |amplitude, i| {
         std.debug.print("{:0>2}: {d: ^8.2} | {d: ^8.2}\n", .{ i, std.math.round(amplitude.re), std.math.round(amplitude.im) });
     }
 
-    const fftAmplitudes = try FT.FFT(testalloc, wave);
-    defer testalloc.free(fftAmplitudes);
+    const FFTamplitudes = try FT.FFT(testalloc, wave);
+    defer testalloc.free(FFTamplitudes);
 
-    for (fftAmplitudes, amplitudes, 0..) |amplitude, examplitude, i| {
-        std.debug.print("{:0>2}: {d: ^8.2} | {d: ^8.2} || {d: ^8.2} | {d: ^8.2} \n", .{ i, std.math.round(amplitude.re), std.math.round(amplitude.im), std.math.round(examplitude.re), std.math.round(examplitude.im) });
+    for (FFTamplitudes, DFTamplitudes, 0..) |FFTamplitude, DFTamplitude, i| {
+        const FFT_re = std.math.round(FFTamplitude.re);
+        const FFT_im = std.math.round(FFTamplitude.im);
+
+        const DFT_re = std.math.round(DFTamplitude.re);
+        const DFT_im = std.math.round(DFTamplitude.im);
+        std.debug.print("{:0>2}: {d: ^8.2} | {d: ^8.2} || {d: ^8.2} | {d: ^8.2} \n", .{ i, std.math.round(FFTamplitude.re), std.math.round(FFTamplitude.im), std.math.round(DFTamplitude.re), std.math.round(DFTamplitude.im) });
+
+        try testing.expect(FFT_re == DFT_re and FFT_im == DFT_im);
     }
 }

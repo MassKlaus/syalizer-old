@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
 
     const raylib = raylib_dep.module("raylib"); // main raylib module
     const raylib_artifact = raylib_dep.artifact("raylib"); // raylib C library
+    b.installArtifact(raylib_artifact);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -85,7 +86,7 @@ pub fn build(b: *std.Build) void {
         pluglib.root_module.addImport("raylib", raylib);
     } else {
         const pluglib = b.addSharedLibrary(.{
-            .name = "syalizer.plug.next",
+            .name = "syalizer.plug",
             // In this case the main source file is merely a path, however, in more
             // complicated build scripts, this could be a generated file.
             .root_source_file = b.path("src/plug.zig"),

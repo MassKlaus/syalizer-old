@@ -1,9 +1,10 @@
 const rl = @import("raylib");
 const std = @import("std");
 const root = @import("root.zig");
+const plug = @import("plug.zig");
 const Complex = std.math.Complex;
 const testing = std.testing;
-const PlugState = root.PlugState;
+const PlugState = plug.PlugState;
 
 var plugUpdate: *const fn (plug_state_ptr: *anyopaque) void = undefined;
 var plugInit: *const fn (plug_state_ptr: *anyopaque) void = undefined;
@@ -45,34 +46,25 @@ pub fn main() anyerror!void {
 
     rl.setTargetFPS(60); // Set our game to run at 60 frames-per-second
 
-    var wants_to_hotreload = false;
-
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
         // Hot Reloading
         //----------------------------------------------------------------------------------
-        if (rl.isKeyPressed(.key_f5)) {
-            std.log.debug("RELOADING", .{});
-            state.isHotReloading = true;
-            wants_to_hotreload = true;
-        }
-
-        if (wants_to_hotreload and state.canHotReload) {
+        if (rl.isKeyPressed(.f5)) {
             std.log.debug("RELOADING", .{});
 
             // Unload DLL
             startHotReloading(state_ptr);
 
-            try recompilePlugDll();
-
             // Fetch New DLL
             try unloadPlugDll();
+
+            try recompilePlugDll(allocator);
+
             loadPlugDll() catch @panic("Failed to load game.dll");
 
             endHotReloading(state_ptr);
-
-            wants_to_hotreload = false;
-            state.isHotReloading = false;
+            std.log.debug("FINISHED RELOADING", .{});
         }
 
         // Music Polling
@@ -88,21 +80,13 @@ pub fn main() anyerror!void {
 }
 
 var plug_dyn_lib: ?std.DynLib = null;
-var toggle = true;
 fn loadPlugDll() !void {
     if (plug_dyn_lib != null) @panic("Invalid Behavior");
 
     var dyn_lib: std.DynLib = undefined;
-    if (toggle) {
-        dyn_lib = std.DynLib.open("syalizer.plug.dll") catch {
-            return error.OpenFail;
-        };
-    } else {
-        dyn_lib = std.DynLib.open("syalizer.plug.next.dll") catch {
-            return error.OpenFail;
-        };
-    }
-    toggle = !toggle;
+    dyn_lib = std.DynLib.open("syalizer.plug.dll") catch {
+        return error.OpenFail;
+    };
 
     plug_dyn_lib = dyn_lib;
     plugUpdate = dyn_lib.lookup(@TypeOf(plugUpdate), "plugUpdate") orelse return error.LookupFail;
@@ -128,4 +112,21 @@ fn unloadPlugDll() !void {
     }
 }
 
-fn recompilePlugDll() !void {}
+fn recompilePlugDll(alloc: std.mem.Allocator) !void {
+    // the command to run
+    const argv = [_][]const u8{ "zig", "build", "-Dplug_only=true" };
+
+    // init a ChildProcess... cleanup is done by calling wait().
+    var proc = std.process.Child.init(&argv, alloc);
+
+    try proc.spawn();
+    // wait() returns a tagged union. If the compilations fails that union
+    // will be in the state .{ .Exited = 2 }
+    const term = try proc.wait();
+    switch (term) {
+        .Exited => |exited| {
+            if (exited == 2) return error.RecompileFail;
+        },
+        else => return,
+    }
+}
