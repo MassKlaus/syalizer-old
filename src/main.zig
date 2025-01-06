@@ -2,6 +2,7 @@ const rl = @import("raylib");
 const std = @import("std");
 const root = @import("root.zig");
 const plug = @import("plug.zig");
+const builtin = @import("builtin");
 const Complex = std.math.Complex;
 const testing = std.testing;
 const PlugState = plug.PlugState;
@@ -84,7 +85,7 @@ fn loadPlugDll() !void {
     if (plug_dyn_lib != null) @panic("Invalid Behavior");
 
     var dyn_lib: std.DynLib = undefined;
-    dyn_lib = std.DynLib.open("syalizer.plug.dll") catch {
+    dyn_lib = std.DynLib.open(findLibPath()) catch {
         return error.OpenFail;
     };
 
@@ -96,6 +97,14 @@ fn loadPlugDll() !void {
     endHotReloading = dyn_lib.lookup(@TypeOf(endHotReloading), "endHotReloading") orelse return error.LookupFail;
 
     std.debug.print("Loaded plug.dll\n", .{});
+}
+
+fn findLibPath() [:0]const u8 {
+    return switch (builtin.target.os.tag) {
+        .windows => "syalizer.plug.dll",
+        .linux => "./zig-out/lib/libsyalizer.plug.so",
+        else => "libsyalizer.plug.so",
+    };
 }
 
 fn unloadPlugDll() !void {
