@@ -31,15 +31,15 @@ pub fn main() anyerror!void {
     const screenWidth = 1920;
     const screenHeight = 1080;
 
-    state = PlugState{ .allocator = &allocator, .music = undefined };
-    const state_ptr: *anyopaque = @ptrCast(&state);
-
     //-------------------------------------------------------------------------------------
     rl.initAudioDevice();
     defer rl.closeAudioDevice();
 
     rl.initWindow(screenWidth, screenHeight, "Syaliser");
     defer rl.closeWindow(); // Close window and OpenGL context
+
+    state = try PlugState.init(&allocator, 12);
+    const state_ptr: *anyopaque = @ptrCast(&state);
 
     plugInit(state_ptr);
     defer plugClose(state_ptr);

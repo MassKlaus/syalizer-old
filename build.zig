@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     const raylib_dep = b.dependency("raylib-zig", .{ .target = target, .optimize = optimize, .shared = true });
 
     const raylib = raylib_dep.module("raylib"); // main raylib module
+    const raygui = raylib_dep.module("raygui"); // raygui module
     const raylib_artifact = raylib_dep.artifact("raylib"); // raylib C library
     b.installArtifact(raylib_artifact);
 
@@ -46,6 +47,7 @@ pub fn build(b: *std.Build) void {
     // step when running `zig build`).
     exe.linkLibrary(raylib_artifact);
     exe.root_module.addImport("raylib", raylib);
+    exe.root_module.addImport("raygui", raygui);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
@@ -73,30 +75,21 @@ pub fn build(b: *std.Build) void {
     if (!plug_only) {
         b.installArtifact(exe);
         b.installArtifact(lib);
-        const pluglib = b.addSharedLibrary(.{
-            .name = "syalizer.plug",
-            // In this case the main source file is merely a path, however, in more
-            // complicated build scripts, this could be a generated file.
-            .root_source_file = b.path("src/plug.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        b.installArtifact(pluglib);
-        pluglib.linkLibrary(raylib_artifact);
-        pluglib.root_module.addImport("raylib", raylib);
-    } else {
-        const pluglib = b.addSharedLibrary(.{
-            .name = "syalizer.plug",
-            // In this case the main source file is merely a path, however, in more
-            // complicated build scripts, this could be a generated file.
-            .root_source_file = b.path("src/plug.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        b.installArtifact(pluglib);
-        pluglib.linkLibrary(raylib_artifact);
-        pluglib.root_module.addImport("raylib", raylib);
+        b.installDirectory(.{ .source_dir = b.path("./shaders/"), .install_dir = .prefix, .install_subdir = "bin/shaders" });
     }
+
+    const pluglib = b.addSharedLibrary(.{
+        .name = "syalizer.plug",
+        // In this case the main source file is merely a path, however, in more
+        // complicated build scripts, this could be a generated file.
+        .root_source_file = b.path("src/plug.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    pluglib.linkLibrary(raylib_artifact);
+    pluglib.root_module.addImport("raylib", raylib);
+    pluglib.root_module.addImport("raygui", raygui);
+    b.installArtifact(pluglib);
 
     // Creates a step for unit testing. This only builds the test executable
 
