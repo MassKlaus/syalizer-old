@@ -21,6 +21,11 @@ pub const PlugState = struct {
         circle = 1,
     };
 
+    pub const RenderOutput = enum(u8) {
+        screen = 0,
+        video = 1,
+    };
+
     const PlugCore = struct {
         samples: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         complex_samples: [max_samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** max_samplesize,
@@ -40,10 +45,14 @@ pub const PlugState = struct {
     shader: ?ShaderInfo = undefined,
     shader_index: usize = 0,
     texture_target: rl.RenderTexture2D = undefined,
+    output_target: rl.RenderTexture2D = undefined,
     shaders: std.ArrayList(ShaderInfo),
     amplify: f32 = 1,
-    renderMode: RenderModes = .circle,
-    toggleLines: bool = true,
+    renderMode: RenderModes = .lines,
+    outputMode: RenderOutput = .screen,
+    toggleLines: bool = false,
+    renderInfo: bool = true,
+    pause: bool = false,
 
     pub fn init(allocator: *std.mem.Allocator, sample_level: usize) PlugError!PlugState {
         if (sample_level > max_level) {
@@ -62,6 +71,7 @@ pub const PlugState = struct {
             .amplitudes = core.amplitudes[0..samplesize],
             .shaders = std.ArrayList(ShaderInfo).init(allocator.*),
             .texture_target = rl.loadRenderTexture(1920, 1080),
+            .output_target = rl.loadRenderTexture(1920, 1080),
         };
     }
 
@@ -84,6 +94,7 @@ inline fn complexAmpToNormalAmp(complex_amplitude: Complex(f32)) f32 {
     return imag;
 }
 
+// a frame is L+R | f32 takes both sides
 fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
     const frame_buffer: ?[*]const f32 = @ptrCast(@alignCast(buffer.?));
 
@@ -92,25 +103,34 @@ fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
         return;
     }
 
-    var buffer_size: usize = @intCast(frames * 2);
+    const frame_count: usize = @intCast(frames);
+    const buffer_size: usize = frame_count;
+    const data_buffer = (frame_buffer.?)[0..buffer_size];
 
-    if (buffer_size > global_plug_state.samples.len) {
-        buffer_size = global_plug_state.samples.len;
-    }
-    const sliced_data = frame_buffer.?[0..buffer_size];
+    CollectAudioSamplesZig(data_buffer, frame_count);
+}
+
+fn CollectAudioSamplesZig(frame_data: []const f32, frames: usize) void {
     const availableSpace = global_plug_state.samples.len - global_plug_state.samples_writer;
+    var sliced_data = frame_data;
+
+    if (frame_data.len > global_plug_state.samples.len) {
+        sliced_data = frame_data[(frame_data.len - global_plug_state.samples.len)..frame_data.len];
+    }
 
     if (sliced_data.len > availableSpace) {
         const end_samples_to_replace = global_plug_state.samples[global_plug_state.samples_writer..];
-        std.mem.copyForwards(f32, end_samples_to_replace, sliced_data[0..availableSpace]);
+        const source_data = sliced_data[0..availableSpace];
+        std.mem.copyForwards(f32, end_samples_to_replace, source_data);
 
         var remaining_space = sliced_data.len - availableSpace;
 
         if (remaining_space > global_plug_state.samples_writer) {
             remaining_space = global_plug_state.samples_writer;
         }
+
         const start_samples_to_replace = global_plug_state.samples[0..remaining_space];
-        std.mem.copyForwards(f32, start_samples_to_replace, sliced_data[availableSpace..]);
+        std.mem.copyForwards(f32, start_samples_to_replace, sliced_data[availableSpace .. availableSpace + remaining_space]);
     } else {
         const sliceToEdit = global_plug_state.samples[global_plug_state.samples_writer..];
         std.mem.copyForwards(f32, sliceToEdit, sliced_data);
@@ -152,6 +172,8 @@ export fn plugInit(plug_state_ptr: *anyopaque) void {
 
     std.debug.print("Music Frames: {}", .{plug_state.music.frameCount});
     rl.playMusicStream(plug_state.music);
+
+    rl.setTraceLogLevel(.warning);
 
     LoadShaders() catch @panic("We fucked up");
 }
@@ -209,7 +231,7 @@ export fn endHotReloading(plug_state_ptr: *anyopaque) void {
     std.log.debug("Ended Hot reloading s2", .{});
 }
 
-fn limitAmplitudeRange(plug_state: *PlugState, min: f32, max: f32) []const f32 {
+fn limitFrequencyRange(plug_state: *PlugState, min: f32, max: f32) []const f32 {
     const amplitudes = plug_state.*.amplitudes;
     const amplitude_cutoff = (amplitudes.len / 2) + 1;
     const valid_amps = amplitudes[0..amplitude_cutoff];
@@ -262,147 +284,271 @@ fn handleInput(plug_state: *PlugState) void {
     if (rl.isKeyPressed(.l)) {
         plug_state.toggleLines = !plug_state.toggleLines;
     }
+
+    if (rl.isKeyPressed(.t)) {
+        plug_state.renderInfo = !plug_state.renderInfo;
+    }
+
+    if (rl.isKeyPressed(.p)) {
+        rl.pauseMusicStream(plug_state.music);
+        RenderVideoWithFFMPEG();
+        rl.resumeMusicStream(plug_state.music);
+    }
+
+    if (rl.isKeyPressed(.space)) {
+        plug_state.pause = !plug_state.pause;
+        if (plug_state.pause) {
+            rl.pauseMusicStream(plug_state.music);
+        } else {
+            rl.resumeMusicStream(plug_state.music);
+        }
+    }
 }
 
 export fn plugUpdate(plug_state_ptr: *anyopaque) void {
     const plug_state: *PlugState = @ptrCast(@alignCast(plug_state_ptr));
+
+    // Music Polling
+    //----------------------------------------------------------------------------------
+    rl.updateMusicStream(plug_state.music);
+    //----------------------------------------------------------------------------------
+
     handleInput(plug_state);
 
     {
-        const amplitudes: []const f32 = limitAmplitudeRange(plug_state, 200, 1500);
+        const amplitudes: []const f32 = limitFrequencyRange(plug_state, 200, 1500);
 
-        const amount_of_points: u64 = 50;
-        const samples_per_point: u64 = (amplitudes.len) / amount_of_points;
-        const points_size = (amount_of_points + 1) * 2;
-        var bottom_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
-        var top_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
+        RenderFrameToTexture(plug_state.texture_target, amplitudes);
 
-        const line_length: f64 = @as(f64, @floatFromInt(rl.getRenderWidth())) / 2.0;
-        const line_step: f64 = line_length / @as(f64, @floatFromInt(amount_of_points));
-        const circle_angle_step = std.math.pi / @as(f64, @floatFromInt(amount_of_points));
-
-        const y_offset: i32 = @as(i32, @divFloor(rl.getRenderHeight(), 2));
-        const x_offset: i32 = @intFromFloat(line_length);
-        const max_height: f64 = @as(f64, @floatFromInt(rl.getRenderHeight())) / 3.0;
-        var x: f64 = 0;
-
-        var index: u64 = 0;
-        const max_amplitude = plug_state.max_amplitude;
-
-        var previousPosX: i32 = 0;
-        var previousPosY: i32 = 0;
-
-        var first_point = true;
-
-        var point_counter: usize = 0;
-
-        {
-            rl.beginTextureMode(plug_state.texture_target);
-            defer rl.endTextureMode();
-
-            rl.clearBackground(rl.Color.black);
-
-            while (index < amplitudes.len and samples_per_point > 0 and max_amplitude > 0 and point_counter < points_size / 2) : (index += samples_per_point) {
-                defer x += line_step;
-                defer point_counter += 1;
-
-                var line_total: f64 = 0;
-
-                var stop = index + samples_per_point;
-
-                if (stop > amplitudes.len) {
-                    stop = amplitudes.len;
-                }
-
-                for (index..stop) |value| {
-                    const amplitude = amplitudes[value];
-                    line_total += amplitude;
-                }
-
-                const height: i32 = @intFromFloat(max_height * plug_state.amplify * 1 * ((line_total / @as(f32, @floatFromInt(samples_per_point))) / max_amplitude));
-                const posY = height;
-                const posX = @as(i32, @intFromFloat(x));
-
-                if (first_point) {
-                    previousPosX = posX;
-                    previousPosY = posY;
-                    first_point = false;
-                }
-
-                if (plug_state.renderMode == .lines) {
-                    // rl.drawLine(x_offset + previousPosX, y_offset - previousPosY, x_offset + posX, y_offset - posY, rl.Color.green);
-                    // rl.drawLine(x_offset + previousPosX, y_offset + previousPosY, x_offset + posX, y_offset + posY, rl.Color.green);
-                    bottom_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(x_offset + posX), @floatFromInt(y_offset + posY));
-                    bottom_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(x_offset - posX), @floatFromInt(y_offset + posY));
-
-                    top_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(x_offset + posX), @floatFromInt(y_offset - posY));
-                    top_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(x_offset - posX), @floatFromInt(y_offset - posY));
-
-                    if (plug_state.toggleLines) {
-                        rl.drawLine(x_offset - previousPosX, y_offset - previousPosY, x_offset - posX, y_offset + posY, rl.Color.green);
-                        rl.drawLine(x_offset + previousPosX, y_offset - previousPosY, x_offset + posX, y_offset + posY, rl.Color.green);
-                    }
-                } else {
-                    const angle = circle_angle_step * @as(f64, @floatFromInt(point_counter));
-                    const radius = @as(f64, @floatFromInt(height)) + 50;
-
-                    const circle_offset_y = y_offset;
-                    const circle_offset_x = x_offset;
-
-                    const circle_posY = @as(i32, @intFromFloat(radius * std.math.sin(angle)));
-                    const circle_posX = @as(i32, @intFromFloat(radius * std.math.cos(angle)));
-
-                    bottom_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(circle_offset_x - circle_posX), @floatFromInt(circle_offset_y - circle_posY));
-                    bottom_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(circle_offset_x - circle_posX), @floatFromInt(circle_offset_y + circle_posY));
-
-                    top_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(circle_offset_x + circle_posX), @floatFromInt(circle_offset_y - circle_posY));
-                    top_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(circle_offset_x + circle_posX), @floatFromInt(circle_offset_y + circle_posY));
-
-                    if (plug_state.toggleLines) {
-                        rl.drawLine(x_offset, y_offset, circle_offset_x - circle_posX, circle_offset_y + circle_posY, rl.Color.green);
-                        rl.drawLine(x_offset, y_offset, circle_offset_x + circle_posX, circle_offset_y + circle_posY, rl.Color.green);
-                        rl.drawLine(x_offset, y_offset, circle_offset_x - circle_posX, circle_offset_y - circle_posY, rl.Color.green);
-                        rl.drawLine(x_offset, y_offset, circle_offset_x + circle_posX, circle_offset_y - circle_posY, rl.Color.green);
-                    }
-                }
-
-                previousPosX = posX;
-                previousPosY = posY;
-            }
-
-            rl.drawLineStrip(&bottom_points, rl.Color.green);
-            rl.drawLineStrip(&top_points, rl.Color.green);
-        }
-
-        {
-            rl.beginDrawing();
-            defer rl.endDrawing();
-            {
-                if (plug_state.shader != null) rl.beginShaderMode(plug_state.shader.?.shader);
-                defer if (plug_state.shader != null) rl.endShaderMode();
-
-                const factor: f32 = if (plug_state.shader != null) 1 else -1;
-
-                rl.drawTextureRec(plug_state.texture_target.texture, rl.Rectangle.init(0, 0, 1920, 1080 * factor), rl.Vector2.init(0, 0), rl.Color.white);
-            }
-
-            const name = if (plug_state.shader) |shader| shader.filename else "None";
-
-            const output = std.fmt.allocPrint(plug_state.allocator.*, "Shader: {s}", .{name}) catch @panic("BAD");
-            defer plug_state.allocator.free(output);
-            const text = AdaptString(plug_state.allocator, output) catch "ERROR";
-            defer plug_state.allocator.free(text);
-
-            rl.drawText(text, 10, 30, 16, rl.Color.green);
-
-            const output_amp = std.fmt.allocPrint(plug_state.allocator.*, "Amplitude: {d:.2}", .{plug_state.amplify}) catch @panic("BAD");
-            defer plug_state.allocator.free(output_amp);
-            const text_amp = AdaptString(plug_state.allocator, output_amp) catch "ERROR";
-            defer plug_state.allocator.free(text_amp);
-
-            rl.drawText(text_amp, 10, 50, 16, rl.Color.green);
-
-            if (rg.guiButton(rl.Rectangle.init(10, 100, 120, 30), "#191#Show Message") != 0) std.log.info("Yeet", .{});
+        if (plug_state.outputMode == .screen) {
+            PrintTextureToScreen(plug_state.texture_target);
         }
     }
+}
+
+fn CalculateLinePointPositions(bottom_points: []rl.Vector2, top_points: []rl.Vector2, points_size: usize, point_counter: usize, x_offset: i32, y_offset: i32, posX: i32, posY: i32) void {
+    const offset = rl.Vector2.init(@floatFromInt(x_offset), @floatFromInt(y_offset));
+    const lastPoint = if (point_counter == 0) rl.Vector2.init(@floatFromInt(posX), @floatFromInt(posY)) else bottom_points[points_size / 2 + point_counter - 1].subtract(offset);
+    const previousPosX = @as(i32, @intFromFloat(lastPoint.x));
+    const previousPosY = @as(i32, @intFromFloat(lastPoint.y));
+
+    bottom_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(x_offset + posX), @floatFromInt(y_offset + posY));
+    bottom_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(x_offset - posX), @floatFromInt(y_offset + posY));
+
+    top_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(x_offset + posX), @floatFromInt(y_offset - posY));
+    top_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(x_offset - posX), @floatFromInt(y_offset - posY));
+
+    if (global_plug_state.toggleLines) {
+        rl.drawLine(x_offset - previousPosX, y_offset - previousPosY, x_offset - posX, y_offset + posY, rl.Color.green);
+        rl.drawLine(x_offset + previousPosX, y_offset - previousPosY, x_offset + posX, y_offset + posY, rl.Color.green);
+    }
+}
+
+fn CalculateCirclePointPositions(bottom_points: []rl.Vector2, top_points: []rl.Vector2, points_size: usize, point_counter: usize, x_offset: i32, y_offset: i32, height: i32, angle: f64) void {
+    const base_radius: i32 = 100;
+    const inner_radius = base_radius - 80;
+    const radius = @as(f64, @floatFromInt(height + base_radius));
+
+    const circle_offset_y = y_offset;
+    const circle_offset_x = x_offset;
+
+    const circle_posY = @as(i32, @intFromFloat(radius * std.math.sin(angle)));
+    const circle_posX = @as(i32, @intFromFloat(radius * std.math.cos(angle)));
+
+    const inner_circle_posY = @as(i32, @intFromFloat(inner_radius * std.math.sin(angle)));
+    const inner_circle_posX = @as(i32, @intFromFloat(inner_radius * std.math.cos(angle)));
+
+    bottom_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(circle_offset_x - circle_posX), @floatFromInt(circle_offset_y - circle_posY));
+    bottom_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(circle_offset_x - circle_posX), @floatFromInt(circle_offset_y + circle_posY));
+
+    top_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(circle_offset_x + circle_posX), @floatFromInt(circle_offset_y - circle_posY));
+    top_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(circle_offset_x + circle_posX), @floatFromInt(circle_offset_y + circle_posY));
+
+    if (global_plug_state.toggleLines) {
+        rl.drawLine(circle_offset_x - inner_circle_posX - @divFloor(circle_posX, 4), circle_offset_y + inner_circle_posY + @divFloor(circle_posY, 4), circle_offset_x - circle_posX, circle_offset_y + circle_posY, rl.Color.green);
+        rl.drawLine(circle_offset_x + inner_circle_posX + @divFloor(circle_posX, 4), circle_offset_y + inner_circle_posY + @divFloor(circle_posY, 4), circle_offset_x + circle_posX, circle_offset_y + circle_posY, rl.Color.green);
+        rl.drawLine(circle_offset_x - inner_circle_posX - @divFloor(circle_posX, 4), circle_offset_y - inner_circle_posY - @divFloor(circle_posY, 4), circle_offset_x - circle_posX, circle_offset_y - circle_posY, rl.Color.green);
+        rl.drawLine(circle_offset_x + inner_circle_posX + @divFloor(circle_posX, 4), circle_offset_y - inner_circle_posY - @divFloor(circle_posY, 4), circle_offset_x + circle_posX, circle_offset_y - circle_posY, rl.Color.green);
+    }
+}
+
+fn RenderFrameToTexture(texture: rl.RenderTexture, amplitudes: []const f32) void {
+    const amount_of_points: u64 = 50;
+    const samples_per_point: u64 = (amplitudes.len) / amount_of_points;
+    const points_size = (amount_of_points + 1) * 2;
+
+    var bottom_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
+    var top_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
+
+    const line_length: f64 = @as(f64, @floatFromInt(rl.getRenderWidth())) / 2.0;
+    const line_step: f64 = line_length / @as(f64, @floatFromInt(amount_of_points));
+    const circle_angle_step = std.math.pi / @as(f64, @floatFromInt(amount_of_points));
+
+    const y_offset: i32 = @as(i32, @divFloor(rl.getRenderHeight(), 2));
+    const x_offset: i32 = @intFromFloat(line_length);
+    const max_height: f64 = @as(f64, @floatFromInt(rl.getRenderHeight())) / 3.0;
+
+    var index: u64 = 0;
+    const max_amplitude = global_plug_state.max_amplitude;
+
+    var previousPosX: i32 = 0;
+    var previousPosY: i32 = 0;
+
+    var point_counter: usize = 0;
+
+    {
+        rl.beginTextureMode(texture);
+        defer rl.endTextureMode();
+
+        rl.clearBackground(rl.Color.black);
+
+        while (index < amplitudes.len and samples_per_point > 0 and max_amplitude > 0 and point_counter < points_size / 2) : (index += samples_per_point) {
+            defer point_counter += 1;
+
+            var line_total: f64 = 0;
+
+            var stop = index + samples_per_point;
+
+            if (stop > amplitudes.len) {
+                stop = amplitudes.len;
+            }
+
+            for (index..stop) |value| {
+                const amplitude = amplitudes[value];
+                line_total += amplitude;
+            }
+
+            const height: i32 = @intFromFloat(max_height * global_plug_state.amplify * 1 * ((line_total / @as(f32, @floatFromInt(samples_per_point))) / max_amplitude));
+
+            const posY = height;
+            const posX = @as(i32, @intFromFloat(line_step * @as(f64, @floatFromInt(point_counter))));
+
+            if (global_plug_state.renderMode == .lines) {
+                CalculateLinePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, posX, posY);
+            } else {
+                const angle = circle_angle_step * @as(f64, @floatFromInt(point_counter));
+
+                CalculateCirclePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, height, angle);
+            }
+
+            previousPosX = posX;
+            previousPosY = posY;
+        }
+
+        rl.drawLineStrip(&bottom_points, rl.Color.green);
+        rl.drawLineStrip(&top_points, rl.Color.green);
+    }
+}
+
+// const image = rl.loadImageFromTexture(texture.texture);
+// defer rl.unloadImage(image);
+// _ = rl.exportImage(image, "Screen.png");
+
+fn PrintTextureToScreen(texture: rl.RenderTexture) void {
+    rl.beginDrawing();
+    defer rl.endDrawing();
+
+    if (global_plug_state.shader != null) {
+        rl.beginShaderMode(global_plug_state.shader.?.shader);
+        defer rl.endShaderMode();
+        rl.drawTextureRec(texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+    } else {
+        rl.drawTextureRec(texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+    }
+    WriteInfo();
+}
+
+fn WriteInfo() void {
+    if (global_plug_state.renderInfo) {
+        const name = if (global_plug_state.shader) |shader| shader.filename else "None";
+
+        const output = std.fmt.allocPrint(global_plug_state.allocator.*, "Shader: {s}", .{name}) catch @panic("BAD");
+        defer global_plug_state.allocator.free(output);
+        const text = AdaptString(global_plug_state.allocator, output) catch "ERROR";
+        defer global_plug_state.allocator.free(text);
+
+        rl.drawText(text, 10, 30, 16, rl.Color.green);
+
+        const output_amp = std.fmt.allocPrint(global_plug_state.allocator.*, "Amplitude: {d:.2}", .{global_plug_state.amplify}) catch @panic("BAD");
+        defer global_plug_state.allocator.free(output_amp);
+        const text_amp = AdaptString(global_plug_state.allocator, output_amp) catch "ERROR";
+        defer global_plug_state.allocator.free(text_amp);
+
+        rl.drawText(text_amp, 10, 50, 16, rl.Color.green);
+    }
+}
+
+fn PrintToImage(input_texture: rl.RenderTexture) rl.Image {
+    const output_texture = global_plug_state.output_target;
+    rl.beginTextureMode(output_texture);
+
+    if (global_plug_state.shader) |shader| {
+        rl.beginShaderMode(shader.shader);
+        defer rl.endShaderMode();
+        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+    } else {
+        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+    }
+    WriteInfo();
+
+    rl.endTextureMode();
+
+    return rl.loadImageFromTexture(output_texture.texture);
+}
+
+fn ClearFFT() void {
+    for (0..global_plug_state.samples.len) |i| {
+        global_plug_state.samples[i] = 0;
+    }
+    global_plug_state.samples_writer = 0;
+}
+
+fn RenderVideoWithFFMPEG() void {
+    const argv = [_][]const u8{ "ffmpeg", "-loglevel", "verbose", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", "60", "-i", "-", "-i", "music/MusicMoment.wav", "-c:v", "libx264", "-b:v", "25000k", "-c:a", "aac", "-b:a", "200k", "output.mp4" };
+    var proc = std.process.Child.init(&argv, global_plug_state.allocator.*);
+    proc.stdin_behavior = .Pipe;
+    proc.spawn() catch @panic("Failed ffmpeg launch");
+
+    const audio = rl.loadWave("music/MusicMoment.wav");
+    defer rl.unloadWave(audio);
+
+    ClearFFT();
+
+    var processed_frames: usize = 0;
+    const frame_rate: usize = 60;
+    const frame_count: usize = @intCast(audio.frameCount);
+    const sampling_rate: usize = @intCast(audio.sampleRate);
+    const sample_buffer = rl.loadWaveSamples(audio);
+
+    const standard_frame_step: usize = @divFloor(sampling_rate, frame_rate);
+
+    std.log.info("\nVisualizer Data: {} {} {} {} {}\n", .{ sample_buffer.len, audio.frameCount, audio.sampleSize, audio.sampleRate, standard_frame_step });
+
+    var frame_step: usize = 0;
+    var counter: usize = 0;
+    const amplitudes: []const f32 = limitFrequencyRange(global_plug_state, 200, 1500);
+
+    while (frame_count > processed_frames) : (processed_frames += frame_step) {
+        defer counter += 1;
+        frame_step = if (frame_count - processed_frames > standard_frame_step) standard_frame_step else frame_count - processed_frames;
+
+        RenderFrameToTexture(global_plug_state.texture_target, amplitudes);
+        const image = PrintToImage(global_plug_state.texture_target);
+        defer rl.unloadImage(image);
+
+        const pixels_raw: [*]const u8 = @ptrCast(@alignCast(image.data));
+
+        const pixels: []const u8 = pixels_raw[0 .. 1920 * 1080 * 4];
+        _ = proc.stdin.?.write(pixels) catch @panic("Bad Pipe!");
+
+        const sampled_frames = sample_buffer[processed_frames * 2 .. (processed_frames + frame_step) * 2];
+        CollectAudioSamplesZig(sampled_frames, frame_step);
+    }
+    std.log.info("Ended: Finished Rendering Frames: {}\n", .{counter});
+
+    proc.stdin.?.close();
+    proc.stdin = null;
+
+    _ = proc.wait() catch @panic("Can't wait for process.");
+    std.log.info("Rendering Done. \n", .{});
 }
