@@ -2,5 +2,5 @@ zig-out/
 .zig-cache/
 music/*
 !music/README.md
-*.mp4
+./*.mp4
 *.jpg
