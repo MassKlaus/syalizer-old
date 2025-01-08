@@ -27,6 +27,7 @@ pub const PlugState = struct {
     };
 
     const PlugCore = struct {
+        temp_buffer: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         samples: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         complex_samples: [max_samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** max_samplesize,
         complex_amplitudes: [max_samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** max_samplesize,
@@ -35,6 +36,7 @@ pub const PlugState = struct {
     core: PlugCore,
 
     allocator: *std.mem.Allocator,
+    temp_buffer: []f32,
     samples: []f32,
     complex_samples: []Complex(f32),
     complex_amplitudes: []Complex(f32),
@@ -65,6 +67,7 @@ pub const PlugState = struct {
         return .{
             .allocator = allocator,
             .core = core,
+            .temp_buffer = core.temp_buffer[0..samplesize],
             .samples = core.samples[0..samplesize],
             .complex_samples = core.complex_samples[0..samplesize],
             .complex_amplitudes = core.complex_amplitudes[0..samplesize],
@@ -112,10 +115,17 @@ fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
 
 fn CollectAudioSamplesZig(samples: []const f32) void {
     const availableSpace = global_plug_state.samples.len - global_plug_state.samples_writer;
-    var sliced_data = samples;
 
-    if (samples.len > global_plug_state.samples.len) {
-        sliced_data = samples[(samples.len - global_plug_state.samples.len)..samples.len];
+    for (samples, 0..) |sample, i| {
+        if (i % 2 == 0) {
+            global_plug_state.temp_buffer[i / 2] = sample;
+        }
+    }
+
+    var sliced_data: []const f32 = global_plug_state.temp_buffer[0 .. samples.len / 2];
+
+    if (sliced_data.len > global_plug_state.samples.len) {
+        sliced_data = sliced_data[(sliced_data.len - global_plug_state.samples.len)..sliced_data.len];
     }
 
     if (sliced_data.len > availableSpace) {
@@ -136,7 +146,7 @@ fn CollectAudioSamplesZig(samples: []const f32) void {
         std.mem.copyForwards(f32, sliceToEdit, sliced_data);
     }
 
-    global_plug_state.samples_writer = (global_plug_state.samples_writer + @divFloor(sliced_data.len, 2)) % global_plug_state.samples.len;
+    global_plug_state.samples_writer = (global_plug_state.samples_writer + sliced_data.len) % global_plug_state.samples.len;
 
     for (global_plug_state.samples, 0..) |sample, i| {
         global_plug_state.complex_samples[i] = Complex(f32).init(sample, 0);
@@ -316,7 +326,7 @@ export fn plugUpdate(plug_state_ptr: *anyopaque) void {
     handleInput(plug_state);
 
     {
-        const amplitudes: []const f32 = limitFrequencyRange(plug_state, 200, 1500);
+        const amplitudes: []const f32 = limitFrequencyRange(plug_state, 200, 3000);
 
         RenderFrameToTexture(plug_state.texture_target, amplitudes);
 
@@ -526,7 +536,7 @@ fn RenderVideoWithFFMPEG() void {
 
     var frame_step: usize = 0;
     var counter: usize = 0;
-    const amplitudes: []const f32 = limitFrequencyRange(global_plug_state, 200, 1500);
+    const amplitudes: []const f32 = limitFrequencyRange(global_plug_state, 200, 3000);
 
     while (frame_count > processed_frames) : (processed_frames += frame_step) {
         defer counter += 1;
