@@ -104,18 +104,18 @@ fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
     }
 
     const frame_count: usize = @intCast(frames);
-    const buffer_size: usize = frame_count;
+    const buffer_size: usize = frame_count * 2;
     const data_buffer = (frame_buffer.?)[0..buffer_size];
 
-    CollectAudioSamplesZig(data_buffer, frame_count);
+    CollectAudioSamplesZig(data_buffer);
 }
 
-fn CollectAudioSamplesZig(frame_data: []const f32, frames: usize) void {
+fn CollectAudioSamplesZig(samples: []const f32) void {
     const availableSpace = global_plug_state.samples.len - global_plug_state.samples_writer;
-    var sliced_data = frame_data;
+    var sliced_data = samples;
 
-    if (frame_data.len > global_plug_state.samples.len) {
-        sliced_data = frame_data[(frame_data.len - global_plug_state.samples.len)..frame_data.len];
+    if (samples.len > global_plug_state.samples.len) {
+        sliced_data = samples[(samples.len - global_plug_state.samples.len)..samples.len];
     }
 
     if (sliced_data.len > availableSpace) {
@@ -136,7 +136,7 @@ fn CollectAudioSamplesZig(frame_data: []const f32, frames: usize) void {
         std.mem.copyForwards(f32, sliceToEdit, sliced_data);
     }
 
-    global_plug_state.samples_writer = (global_plug_state.samples_writer + frames) % global_plug_state.samples.len;
+    global_plug_state.samples_writer = (global_plug_state.samples_writer + @divFloor(sliced_data.len, 2)) % global_plug_state.samples.len;
 
     for (global_plug_state.samples, 0..) |sample, i| {
         global_plug_state.complex_samples[i] = Complex(f32).init(sample, 0);
@@ -541,8 +541,8 @@ fn RenderVideoWithFFMPEG() void {
         const pixels: []const u8 = pixels_raw[0 .. 1920 * 1080 * 4];
         _ = proc.stdin.?.write(pixels) catch @panic("Bad Pipe!");
 
-        const sampled_frames = sample_buffer[processed_frames * 2 .. (processed_frames + frame_step) * 2];
-        CollectAudioSamplesZig(sampled_frames, frame_step);
+        const sampled_frames = sample_buffer[processed_frames * audio.channels .. (processed_frames + frame_step) * audio.channels];
+        CollectAudioSamplesZig(sampled_frames);
     }
     std.log.info("Ended: Finished Rendering Frames: {}\n", .{counter});
 

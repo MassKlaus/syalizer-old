@@ -44,6 +44,7 @@ void main()
 
             if(sub_og_color != vec3(0.0)) {
                 bloom += addition * w;
+                bloom += addition * w;
             }
         }
     }
