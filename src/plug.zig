@@ -14,11 +14,19 @@ const ShaderInfo = struct {
     filename: []const u8,
 };
 
+pub const ProcessingMode = enum(u8) {
+    normal = 0,
+    log,
+    smooth,
+    smear,
+};
+
 pub const PlugState = struct {
     const PlugError = error{TooLarge};
     pub const RenderModes = enum(u8) {
         lines = 0,
         circle = 1,
+        bars = 2,
     };
 
     pub const RenderOutput = enum(u8) {
@@ -29,20 +37,31 @@ pub const PlugState = struct {
     const PlugCore = struct {
         temp_buffer: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         samples: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
+        smooth_samples: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         complex_samples: [max_samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** max_samplesize,
         complex_amplitudes: [max_samplesize]Complex(f32) = [1]Complex(f32){Complex(f32).init(0, 0)} ** max_samplesize,
         amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
+        log_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
+        smear_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
+        smooth_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
     };
     core: PlugCore,
 
     allocator: *std.mem.Allocator,
+    samplesize: u64,
     temp_buffer: []f32,
     samples: []f32,
+    smooth_samples: []f32,
     complex_samples: []Complex(f32),
     complex_amplitudes: []Complex(f32),
     amplitudes: []f32,
+    log_amplitudes: []f32,
+    smear_amplitudes: []f32,
+    smooth_amplitudes: []f32,
     max_amplitude: f32 = 0,
-    samples_writer: u64 = 0,
+    max_log_amplitude: f32 = 0,
+    max_smooth_amplitude: f32 = 0,
+    max_smear_amplitude: f32 = 0,
     music: rl.Music = undefined,
     shader: ?ShaderInfo = undefined,
     shader_index: usize = 0,
@@ -52,6 +71,7 @@ pub const PlugState = struct {
     amplify: f32 = 1,
     renderMode: RenderModes = .lines,
     outputMode: RenderOutput = .screen,
+    processingMode: ProcessingMode = .normal,
     toggleLines: bool = false,
     renderInfo: bool = true,
     pause: bool = false,
@@ -67,11 +87,16 @@ pub const PlugState = struct {
         return .{
             .allocator = allocator,
             .core = core,
+            .samplesize = samplesize,
+            .smooth_samples = core.smooth_samples[0..samplesize],
             .temp_buffer = core.temp_buffer[0..samplesize],
             .samples = core.samples[0..samplesize],
             .complex_samples = core.complex_samples[0..samplesize],
             .complex_amplitudes = core.complex_amplitudes[0..samplesize],
             .amplitudes = core.amplitudes[0..samplesize],
+            .log_amplitudes = core.log_amplitudes[0..samplesize],
+            .smear_amplitudes = core.smear_amplitudes[0..samplesize],
+            .smooth_amplitudes = core.smooth_amplitudes[0..samplesize],
             .shaders = std.ArrayList(ShaderInfo).init(allocator.*),
             .texture_target = rl.loadRenderTexture(1920, 1080),
             .output_target = rl.loadRenderTexture(1920, 1080),
@@ -114,8 +139,6 @@ fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
 }
 
 fn CollectAudioSamplesZig(samples: []const f32) void {
-    const availableSpace = global_plug_state.samples.len - global_plug_state.samples_writer;
-
     for (samples, 0..) |sample, i| {
         if (i % 2 == 0) {
             global_plug_state.temp_buffer[i / 2] = sample;
@@ -128,27 +151,20 @@ fn CollectAudioSamplesZig(samples: []const f32) void {
         sliced_data = sliced_data[(sliced_data.len - global_plug_state.samples.len)..sliced_data.len];
     }
 
-    if (sliced_data.len > availableSpace) {
-        const end_samples_to_replace = global_plug_state.samples[global_plug_state.samples_writer..];
-        const source_data = sliced_data[0..availableSpace];
-        std.mem.copyForwards(f32, end_samples_to_replace, source_data);
+    std.mem.rotate(f32, global_plug_state.samples, sliced_data.len);
+    const target_write = global_plug_state.samples[(global_plug_state.samples.len - sliced_data.len)..];
+    std.mem.copyForwards(f32, target_write, sliced_data);
+}
 
-        var remaining_space = sliced_data.len - availableSpace;
-
-        if (remaining_space > global_plug_state.samples_writer) {
-            remaining_space = global_plug_state.samples_writer;
-        }
-
-        const start_samples_to_replace = global_plug_state.samples[0..remaining_space];
-        std.mem.copyForwards(f32, start_samples_to_replace, sliced_data[availableSpace .. availableSpace + remaining_space]);
-    } else {
-        const sliceToEdit = global_plug_state.samples[global_plug_state.samples_writer..];
-        std.mem.copyForwards(f32, sliceToEdit, sliced_data);
+fn AnalyzeAudioSignal(delta_time: f32) usize {
+    // Smooth the audio
+    for (global_plug_state.samples, 0..) |sample, i| {
+        const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(global_plug_state.samples.len));
+        const hann: f32 = 0.5 - 0.5 * std.math.cos(2 * std.math.pi * t);
+        global_plug_state.smooth_samples[i] = sample * hann;
     }
 
-    global_plug_state.samples_writer = (global_plug_state.samples_writer + sliced_data.len) % global_plug_state.samples.len;
-
-    for (global_plug_state.samples, 0..) |sample, i| {
+    for (global_plug_state.smooth_samples, 0..) |sample, i| {
         global_plug_state.complex_samples[i] = Complex(f32).init(sample, 0);
     }
 
@@ -162,6 +178,44 @@ fn CollectAudioSamplesZig(samples: []const f32) void {
             global_plug_state.max_amplitude = global_plug_state.amplitudes[i];
         }
     }
+
+    // "Squash" into the Logarithmic Scale
+    const frequency_step: f32 = 1.06;
+    const lowest_frequency: f32 = 1.0;
+    var size: usize = 0;
+    var frequency = lowest_frequency;
+    global_plug_state.max_log_amplitude = 0;
+    while (frequency < @as(f32, @floatFromInt(global_plug_state.samples.len)) / 2) : (frequency = std.math.ceil(frequency * frequency_step)) {
+        const f1: f32 = std.math.ceil(frequency * frequency_step);
+        var a: f32 = 0.0;
+
+        var q: usize = @intFromFloat(frequency);
+        while (q < @divFloor(global_plug_state.samples.len, 2) and q < @as(usize, @intFromFloat(f1))) : (q += 1) {
+            const b: f32 = global_plug_state.amplitudes[q];
+            if (b > a) a = b;
+        }
+
+        if (global_plug_state.max_log_amplitude < a) global_plug_state.max_log_amplitude = a;
+
+        global_plug_state.log_amplitudes[size] = a;
+        size += 1;
+    }
+
+    // Smooth out and smear the values
+    global_plug_state.max_smooth_amplitude = 0;
+    global_plug_state.max_smear_amplitude = 0;
+
+    for (0..size) |i| {
+        const smoothness: f32 = 8;
+        global_plug_state.smooth_amplitudes[i] += (global_plug_state.log_amplitudes[i] - global_plug_state.smooth_amplitudes[i]) * smoothness * delta_time;
+        if (global_plug_state.max_smooth_amplitude < global_plug_state.smooth_amplitudes[i]) global_plug_state.max_smooth_amplitude = global_plug_state.smooth_amplitudes[i];
+
+        const smearness: f32 = 3;
+        global_plug_state.smear_amplitudes[i] += (global_plug_state.smooth_amplitudes[i] - global_plug_state.smear_amplitudes[i]) * smearness * delta_time;
+        if (global_plug_state.max_smear_amplitude < global_plug_state.smear_amplitudes[i]) global_plug_state.max_smear_amplitude = global_plug_state.smear_amplitudes[i];
+    }
+
+    return size;
 }
 
 export fn plugClose(plug_state_ptr: *anyopaque) void {
@@ -283,7 +337,11 @@ fn handleInput(plug_state: *PlugState) void {
     }
 
     if (rl.isKeyPressed(.enter)) {
-        plug_state.renderMode = if (plug_state.renderMode == .circle) .lines else .circle;
+        plug_state.renderMode = switch (plug_state.renderMode) {
+            .lines => .circle,
+            .circle => .bars,
+            .bars => .lines,
+        };
     }
 
     if (rl.isKeyPressed(.r)) {
@@ -313,6 +371,44 @@ fn handleInput(plug_state: *PlugState) void {
             rl.resumeMusicStream(plug_state.music);
         }
     }
+
+    if (rl.isKeyPressed(.page_down)) {
+        plug_state.processingMode = switch (plug_state.processingMode) {
+            .normal => .smooth,
+            .log => .normal,
+            .smear => .log,
+            .smooth => .smear,
+        };
+    }
+
+    if (rl.isKeyPressed(.page_up)) {
+        plug_state.processingMode = switch (plug_state.processingMode) {
+            .normal => .log,
+            .log => .smear,
+            .smear => .smooth,
+            .smooth => .normal,
+        };
+    }
+}
+
+fn getAmplitudesToRender(mode: ProcessingMode, delta_time: f32) struct { amps: []const f32, max: f32 } {
+    const size = AnalyzeAudioSignal(delta_time);
+
+    const amplitudes = switch (mode) {
+        .normal => limitFrequencyRange(global_plug_state, 200, 3000),
+        .log => global_plug_state.log_amplitudes[0..size],
+        .smooth => global_plug_state.smooth_amplitudes[0..size],
+        .smear => global_plug_state.smear_amplitudes[0..size],
+    };
+
+    const max_amplitude = switch (mode) {
+        .normal => global_plug_state.max_amplitude,
+        .log => global_plug_state.max_log_amplitude,
+        .smooth => global_plug_state.max_smooth_amplitude,
+        .smear => global_plug_state.max_smear_amplitude,
+    };
+
+    return .{ .amps = amplitudes, .max = max_amplitude };
 }
 
 export fn plugUpdate(plug_state_ptr: *anyopaque) void {
@@ -326,9 +422,9 @@ export fn plugUpdate(plug_state_ptr: *anyopaque) void {
     handleInput(plug_state);
 
     {
-        const amplitudes: []const f32 = limitFrequencyRange(plug_state, 200, 3000);
-
-        RenderFrameToTexture(plug_state.texture_target, amplitudes);
+        const delta_time = rl.getFrameTime();
+        const amp_data = getAmplitudesToRender(plug_state.processingMode, delta_time);
+        RenderFrameToTexture(plug_state.texture_target, amp_data.amps, amp_data.max);
 
         if (plug_state.outputMode == .screen) {
             PrintTextureToScreen(plug_state.texture_target);
@@ -382,7 +478,7 @@ fn CalculateCirclePointPositions(bottom_points: []rl.Vector2, top_points: []rl.V
     }
 }
 
-fn RenderFrameToTexture(texture: rl.RenderTexture, amplitudes: []const f32) void {
+fn RenderFrameToTexture(texture: rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32) void {
     const amount_of_points: u64 = 50;
     const samples_per_point: u64 = (amplitudes.len) / amount_of_points;
     const points_size = (amount_of_points + 1) * 2;
@@ -399,7 +495,6 @@ fn RenderFrameToTexture(texture: rl.RenderTexture, amplitudes: []const f32) void
     const max_height: f64 = @as(f64, @floatFromInt(rl.getRenderHeight())) / 3.0;
 
     var index: u64 = 0;
-    const max_amplitude = global_plug_state.max_amplitude;
 
     var previousPosX: i32 = 0;
     var previousPosY: i32 = 0;
@@ -415,7 +510,7 @@ fn RenderFrameToTexture(texture: rl.RenderTexture, amplitudes: []const f32) void
         while (index < amplitudes.len and samples_per_point > 0 and max_amplitude > 0 and point_counter < points_size / 2) : (index += samples_per_point) {
             defer point_counter += 1;
 
-            var line_total: f64 = 0;
+            var line_total: f32 = 0;
 
             var stop = index + samples_per_point;
 
@@ -428,25 +523,35 @@ fn RenderFrameToTexture(texture: rl.RenderTexture, amplitudes: []const f32) void
                 line_total += amplitude;
             }
 
-            const height: i32 = @intFromFloat(max_height * global_plug_state.amplify * 1 * ((line_total / @as(f32, @floatFromInt(samples_per_point))) / max_amplitude));
+            const height: i32 = @intFromFloat(max_height * global_plug_state.amplify * 1 * ((line_total / @as(f32, @floatFromInt(samples_per_point)))) / max_amplitude);
 
             const posY = height;
-            const posX = @as(i32, @intFromFloat(line_step * @as(f64, @floatFromInt(point_counter))));
+            const posX = @as(i32, @intFromFloat(line_step)) * @as(i32, @intCast(point_counter));
 
-            if (global_plug_state.renderMode == .lines) {
-                CalculateLinePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, posX, posY);
-            } else {
-                const angle = circle_angle_step * @as(f64, @floatFromInt(point_counter));
-
-                CalculateCirclePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, height, angle);
+            switch (global_plug_state.renderMode) {
+                .lines => {
+                    CalculateLinePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, posX, posY);
+                },
+                .circle => {
+                    const angle = circle_angle_step * @as(f64, @floatFromInt(point_counter));
+                    CalculateCirclePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, height, angle);
+                },
+                .bars => {
+                    rl.drawRectangle(x_offset - posX, y_offset - posY, @intFromFloat(line_step), height, rl.Color.green);
+                    rl.drawRectangle(x_offset + posX, y_offset - posY, @intFromFloat(line_step), height, rl.Color.green);
+                    rl.drawRectangle(x_offset - posX, y_offset, @intFromFloat(line_step), height, rl.Color.green);
+                    rl.drawRectangle(x_offset + posX, y_offset, @intFromFloat(line_step), height, rl.Color.green);
+                },
             }
 
-            previousPosX = posX;
+            if (global_plug_state.renderMode == .lines) {} else previousPosX = posX;
             previousPosY = posY;
         }
 
-        rl.drawLineStrip(&bottom_points, rl.Color.green);
-        rl.drawLineStrip(&top_points, rl.Color.green);
+        if (global_plug_state.renderMode == .lines or global_plug_state.renderMode == .circle) {
+            rl.drawLineStrip(&bottom_points, rl.Color.green);
+            rl.drawLineStrip(&top_points, rl.Color.green);
+        }
     }
 }
 
@@ -485,6 +590,21 @@ fn WriteInfo() void {
         defer global_plug_state.allocator.free(text_amp);
 
         rl.drawText(text_amp, 10, 50, 16, rl.Color.green);
+
+        switch (global_plug_state.processingMode) {
+            .normal => rl.drawText("Processing: Normal", 10, 70, 16, rl.Color.green),
+            .log => rl.drawText("Processing: Log", 10, 70, 16, rl.Color.green),
+            .smooth => rl.drawText("Processing: Smooth", 10, 70, 16, rl.Color.green),
+            .smear => rl.drawText("Processing: Smear", 10, 70, 16, rl.Color.green),
+        }
+
+        switch (global_plug_state.renderMode) {
+            .circle => rl.drawText("Rendering: Circle", 10, 90, 16, rl.Color.green),
+            .lines => rl.drawText("Rendering: Lines", 10, 90, 16, rl.Color.green),
+            .bars => rl.drawText("Rendering: Bars", 10, 90, 16, rl.Color.green),
+        }
+
+        rl.drawText(rl.RAYLIB_VERSION, 10, 110, 16, rl.Color.green);
     }
 }
 
@@ -508,9 +628,14 @@ fn PrintToImage(input_texture: rl.RenderTexture) rl.Image {
 
 fn ClearFFT() void {
     for (0..global_plug_state.samples.len) |i| {
-        global_plug_state.samples[i] = 0;
+        global_plug_state.samples[i] = 0.0;
+        global_plug_state.smooth_amplitudes[i] = 0.0;
+        global_plug_state.smear_amplitudes[i] = 0.0;
+        global_plug_state.smooth_samples[i] = 0.0;
+        global_plug_state.log_amplitudes[i] = 0.0;
+        global_plug_state.complex_amplitudes[i] = Complex(f32).init(0, 0);
+        global_plug_state.complex_samples[i] = Complex(f32).init(0, 0);
     }
-    global_plug_state.samples_writer = 0;
 }
 
 fn RenderVideoWithFFMPEG() void {
@@ -536,13 +661,14 @@ fn RenderVideoWithFFMPEG() void {
 
     var frame_step: usize = 0;
     var counter: usize = 0;
-    const amplitudes: []const f32 = limitFrequencyRange(global_plug_state, 200, 3000);
+    const delta_time = 1 / frame_rate;
 
     while (frame_count > processed_frames) : (processed_frames += frame_step) {
         defer counter += 1;
         frame_step = if (frame_count - processed_frames > standard_frame_step) standard_frame_step else frame_count - processed_frames;
 
-        RenderFrameToTexture(global_plug_state.texture_target, amplitudes);
+        const amp_data = getAmplitudesToRender(global_plug_state.processingMode, delta_time);
+        RenderFrameToTexture(global_plug_state.texture_target, amp_data.amps, amp_data.max);
         const image = PrintToImage(global_plug_state.texture_target);
         defer rl.unloadImage(image);
 

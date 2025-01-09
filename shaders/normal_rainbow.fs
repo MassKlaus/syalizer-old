@@ -19,7 +19,7 @@ vec3 adjustToMax(vec3 color) {
 void main()
 {
     vec2 resolution = vec2(1920, 1080);
-    float intensity = 10.1;
+    float intensity = 1.1;
 
     vec2 texel = 1.0 / resolution;
     vec2 uv = gl_FragCoord.xy / resolution;
