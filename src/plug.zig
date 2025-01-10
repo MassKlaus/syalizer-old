@@ -5,9 +5,11 @@ const rl = @import("raylib");
 const rg = @import("raygui");
 const root = @import("root.zig");
 
-pub var global_plug_state: *PlugState = undefined;
+var global_plug_state: *PlugState = undefined;
 const max_level = 16;
 const max_samplesize = std.math.pow(u64, 2, max_level);
+var text_buffer: [1024]u8 = [1]u8{0} ** 1024;
+var zero_terminated_buffer: [1024]u8 = [1]u8{0} ** 1024;
 
 const ShaderInfo = struct {
     shader: rl.Shader,
@@ -242,7 +244,13 @@ export fn plugInit(plug_state_ptr: *anyopaque) void {
     LoadShaders() catch @panic("We fucked up");
 }
 
-fn AdaptString(allocator: *std.mem.Allocator, text: []const u8) ![:0]const u8 {
+fn AdaptString(text: []const u8) [:0]const u8 {
+    std.mem.copyForwards(u8, &zero_terminated_buffer, text);
+    zero_terminated_buffer[text.len] = 0;
+    return zero_terminated_buffer[0..text.len :0];
+}
+
+fn AdaptStringAlloc(allocator: *std.mem.Allocator, text: []const u8) ![:0]const u8 {
     var zero_terminated_text = try allocator.alloc(u8, text.len + 1);
     std.mem.copyForwards(u8, zero_terminated_text, text);
     zero_terminated_text[text.len] = 0;
@@ -257,10 +265,8 @@ fn LoadShaders() !void {
     defer walker.deinit();
 
     while (try walker.next()) |entry| {
-        const path: []const u8 = try shaders_dir.realpathAlloc(global_plug_state.allocator.*, entry.path);
-        defer global_plug_state.allocator.free(path);
-        const valid_path = AdaptString(global_plug_state.allocator, path) catch "ERROR";
-        defer global_plug_state.allocator.free(valid_path);
+        const path: []const u8 = try shaders_dir.realpath(entry.path, &text_buffer);
+        const valid_path = try AdaptStringAlloc(global_plug_state.allocator, path);
 
         const name = try global_plug_state.allocator.dupe(u8, entry.basename);
 
@@ -577,17 +583,13 @@ fn WriteInfo() void {
     if (global_plug_state.renderInfo) {
         const name = if (global_plug_state.shader) |shader| shader.filename else "None";
 
-        const output = std.fmt.allocPrint(global_plug_state.allocator.*, "Shader: {s}", .{name}) catch @panic("BAD");
-        defer global_plug_state.allocator.free(output);
-        const text = AdaptString(global_plug_state.allocator, output) catch "ERROR";
-        defer global_plug_state.allocator.free(text);
+        const output = std.fmt.bufPrint(&text_buffer, "Shader: {s}", .{name}) catch @panic("BAD");
+        const text = AdaptString(output);
 
         rl.drawText(text, 10, 30, 16, rl.Color.green);
 
-        const output_amp = std.fmt.allocPrint(global_plug_state.allocator.*, "Amplitude: {d:.2}", .{global_plug_state.amplify}) catch @panic("BAD");
-        defer global_plug_state.allocator.free(output_amp);
-        const text_amp = AdaptString(global_plug_state.allocator, output_amp) catch "ERROR";
-        defer global_plug_state.allocator.free(text_amp);
+        const output_amp = std.fmt.bufPrint(&text_buffer, "Amplitude: {d:.2}", .{global_plug_state.amplify}) catch @panic("BAD");
+        const text_amp = AdaptString(output_amp);
 
         rl.drawText(text_amp, 10, 50, 16, rl.Color.green);
 

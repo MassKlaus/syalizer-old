@@ -4,18 +4,6 @@ out vec4 fragColor;
 
 uniform sampler2D texture0;            // The input texture
 
-vec3 adjustToMax(vec3 color) {
-    float maxField = max(color.r, max(color.g, color.b)); // Find the max field
-
-    // Set the maximum field to maxField, keep the others unchanged
-    color.r = (color.r == maxField) ? 255.0 : color.r;
-    color.g = (color.g == maxField) ? 255.0 : color.g;
-    color.b = (color.b == maxField) ? 255.0 : color.b;
-
-    return color;
-}
-
-
 void main()
 {
     vec2 resolution = vec2(1920, 1080);
