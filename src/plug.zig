@@ -4,27 +4,20 @@ const Complex = std.math.Complex;
 const rl = @import("raylib");
 const rg = @import("raygui");
 const root = @import("root.zig");
+const visualizer = @import("pages/visualizer.zig");
+const menu = @import("pages/selection_menu.zig");
+const settings_page = @import("pages/settings.zig");
 
 var global_plug_state: *PlugState = undefined;
+
 const max_level = 16;
 const max_samplesize = std.math.pow(u64, 2, max_level);
-var text_buffer: [1024]u8 = [1]u8{0} ** 1024;
-var zero_terminated_buffer: [1024]u8 = [1]u8{0} ** 1024;
-
-const ShaderInfo = struct {
-    shader: rl.Shader,
-    filename: []const u8,
-};
-
-pub const ProcessingMode = enum(u8) {
-    normal = 0,
-    log,
-    smooth,
-    smear,
-};
+pub var text_buffer: [1024]u8 = [1]u8{0} ** 1024;
+pub var zero_terminated_buffer: [1024]u8 = [1]u8{0} ** 1024;
 
 pub const PlugState = struct {
     const PlugError = error{TooLarge};
+
     pub const RenderModes = enum(u8) {
         lines = 0,
         circle = 1,
@@ -34,6 +27,29 @@ pub const PlugState = struct {
     pub const RenderOutput = enum(u8) {
         screen = 0,
         video = 1,
+    };
+
+    pub const Pages = enum {
+        SelectionMenu,
+        Visualizer,
+        Settings,
+    };
+
+    pub const ProcessingMode = enum(u8) {
+        normal = 0,
+        log,
+        smooth,
+        smear,
+    };
+
+    pub const ShaderInfo = struct {
+        shader: rl.Shader,
+        filename: [:0]const u8,
+    };
+
+    pub const SongInfo = struct {
+        path: [:0]const u8,
+        filename: [:0]const u8,
     };
 
     const PlugCore = struct {
@@ -47,9 +63,33 @@ pub const PlugState = struct {
         smear_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         smooth_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
     };
+
+    const UserSettings = struct {
+        front_color: rl.Color,
+        back_color: rl.Color,
+        focused_color: rl.Color,
+        pressed_color: rl.Color,
+        border_color: rl.Color,
+        fps: i32,
+
+        pub fn init() UserSettings {
+            return .{
+                .front_color = rl.Color.green,
+                .back_color = rl.Color.black,
+                .border_color = rl.Color.green,
+                .focused_color = rl.Color.lime,
+                .pressed_color = rl.Color.dark_green,
+                .fps = 60,
+            };
+        }
+    };
+
+    // hardcoded arrays
     core: PlugCore,
 
     allocator: *std.mem.Allocator,
+
+    // Buffers holding the different data used to render the sound
     samplesize: u64,
     temp_buffer: []f32,
     samples: []f32,
@@ -64,19 +104,48 @@ pub const PlugState = struct {
     max_log_amplitude: f32 = 0,
     max_smooth_amplitude: f32 = 0,
     max_smear_amplitude: f32 = 0,
-    music: rl.Music = undefined,
-    shader: ?ShaderInfo = undefined,
-    shader_index: usize = 0,
-    texture_target: rl.RenderTexture2D = undefined,
-    output_target: rl.RenderTexture2D = undefined,
-    shaders: std.ArrayList(ShaderInfo),
+
+    // Output amplifier
     amplify: f32 = 1,
+
+    // Music Currently Handling
+    music: ?rl.Music = null,
+    songs: std.ArrayList(SongInfo),
+    song: ?*SongInfo = null,
+    preview_song: ?*SongInfo = null,
+    preview_audio: ?rl.Wave = null,
+    preview_audio_data: []f32 = undefined,
+
+    // Collection Of Shaders
+    shaders: std.ArrayList(ShaderInfo),
+    shader: ?*ShaderInfo = null,
+    shader_index: usize = 0,
+
+    render_texture: rl.RenderTexture2D = undefined,
+    shader_texture: rl.RenderTexture2D = undefined,
+
+    // Enum State
+    page: Pages = .SelectionMenu,
     renderMode: RenderModes = .lines,
     outputMode: RenderOutput = .screen,
-    processingMode: ProcessingMode = .normal,
-    toggleLines: bool = false,
-    renderInfo: bool = true,
+    processing_mode: ProcessingMode = .normal,
+
+    // Render Tracking
+    render_total_frames: f32 = 1,
+    render_frame_counter: f32 = 1,
+
+    // Togglable Edits
+    toggle_lines: bool = false,
+    render_info: bool = true,
     pause: bool = false,
+    view_UI: bool = true,
+
+    log_file: std.fs.File,
+    log_writer: std.fs.File.Writer,
+
+    //Page stack
+    pages: std.ArrayList(Pages),
+    settings: UserSettings,
 
     pub fn init(allocator: *std.mem.Allocator, sample_level: usize) PlugError!PlugState {
         if (sample_level > max_level) {
@@ -85,6 +154,8 @@ pub const PlugState = struct {
 
         var core: PlugCore = .{};
         const samplesize = std.math.pow(u64, 2, sample_level);
+
+        const file = std.fs.cwd().createFile("./output.log", .{ .truncate = true }) catch @panic("Cannot create file");
 
         return .{
             .allocator = allocator,
@@ -100,13 +171,243 @@ pub const PlugState = struct {
             .smear_amplitudes = core.smear_amplitudes[0..samplesize],
             .smooth_amplitudes = core.smooth_amplitudes[0..samplesize],
             .shaders = std.ArrayList(ShaderInfo).init(allocator.*),
-            .texture_target = rl.loadRenderTexture(1920, 1080),
-            .output_target = rl.loadRenderTexture(1920, 1080),
+            .songs = std.ArrayList(SongInfo).init(allocator.*),
+            .render_texture = rl.loadRenderTexture(1920, 1080),
+            .shader_texture = rl.loadRenderTexture(1920, 1080),
+            .pages = std.ArrayList(Pages).init(allocator.*),
+            .settings = UserSettings.init(),
+            .log_file = file,
+            .log_writer = file.writer(),
         };
     }
 
     pub fn deinit(self: *PlugState) void {
+        self.UnloadShaders();
+        self.UnloadSongList();
         self.shaders.deinit();
+        self.songs.deinit();
+        self.pages.deinit();
+    }
+
+    pub fn LoadShaders(self: *PlugState) !void {
+        var shaders_dir = std.fs.cwd().openDir("./shaders", .{ .iterate = true }) catch blk: {
+            self.log_info("Failed to open shader folder, trying to create it.", .{});
+            std.fs.cwd().makeDir("./shaders") catch |err| {
+                self.log_error("Failed to create shader folder. Quitting", .{});
+                return err;
+            };
+
+            break :blk std.fs.cwd().openDir("./shaders", .{ .iterate = true }) catch |err| {
+                return err;
+            };
+        };
+
+        defer shaders_dir.close();
+
+        self.log("Shaders Folder Opened", .{}, false);
+
+        var walker = shaders_dir.walk(self.allocator.*) catch |err| {
+            self.log_error("Failed to initalize walker.", .{});
+            return err;
+        };
+        defer walker.deinit();
+        self.log("Shaders Walker Created", .{}, false);
+
+        while (walker.next() catch |err| {
+            self.log_error("Failed to fetch next file entry from walker.", .{});
+            return err;
+        }) |entry| {
+            self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
+
+            const path: []const u8 = try shaders_dir.realpath(entry.path, &text_buffer);
+            const valid_path = try AdaptStringAlloc(self.allocator, path);
+            defer self.allocator.free(valid_path);
+
+            const name = try AdaptStringAlloc(self.allocator, entry.basename);
+            try self.shaders.append(.{ .filename = name, .shader = rl.loadShader(null, valid_path) });
+        }
+
+        self.log_info("{} Shaders Loaded", .{self.shaders.items.len});
+    }
+
+    pub fn UnloadShaders(self: *PlugState) void {
+        for (self.shaders.items) |shaderInfo| {
+            rl.unloadShader(shaderInfo.shader);
+            self.allocator.free(shaderInfo.filename);
+        }
+
+        self.shaders.clearRetainingCapacity();
+    }
+
+    pub fn LoadSongList(self: *PlugState) !void {
+        var songs_dir = std.fs.cwd().openDir("./music", .{ .iterate = true }) catch blk: {
+            self.log_info("Failed to open music folder, trying to create it.", .{});
+            std.fs.cwd().makeDir("./music") catch |err| {
+                self.log_error("Failed to create music folder. Quitting", .{});
+                return err;
+            };
+
+            break :blk std.fs.cwd().openDir("./music", .{ .iterate = true }) catch |err| {
+                return err;
+            };
+        };
+        defer songs_dir.close();
+
+        self.log("Music Folder Opened", .{}, false);
+
+        var walker = songs_dir.walk(self.allocator.*) catch |err| {
+            self.log_error("Failed to initalize walker.", .{});
+            return err;
+        };
+        defer walker.deinit();
+
+        self.log("Music Walker Created", .{}, false);
+
+        while (try walker.next()) |entry| {
+            self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
+            const path: []const u8 = try songs_dir.realpath(entry.path, &text_buffer);
+            const valid_path = try AdaptStringAlloc(self.allocator, path);
+            const name = try AdaptStringAlloc(self.allocator, entry.basename);
+
+            try self.songs.append(.{ .filename = name, .path = valid_path });
+        }
+
+        self.log_info("{} Songs Loaded", .{self.songs.items.len});
+    }
+
+    pub fn UnloadSongList(self: *PlugState) void {
+        for (self.songs.items) |songInfo| {
+            self.allocator.free(songInfo.filename);
+            self.allocator.free(songInfo.path);
+        }
+
+        self.songs.clearRetainingCapacity();
+    }
+
+    pub fn ClearFFT(plug_state: *PlugState) void {
+        for (0..plug_state.samples.len) |i| {
+            plug_state.samples[i] = 0.0;
+            plug_state.smooth_amplitudes[i] = 0.0;
+            plug_state.smear_amplitudes[i] = 0.0;
+            plug_state.smooth_samples[i] = 0.0;
+            plug_state.log_amplitudes[i] = 0.0;
+            plug_state.complex_amplitudes[i] = Complex(f32).init(0, 0);
+            plug_state.complex_samples[i] = Complex(f32).init(0, 0);
+        }
+
+        plug_state.render_frame_counter = 1;
+        plug_state.render_total_frames = 1;
+    }
+
+    pub fn NavigateTo(plug_state: *PlugState, page: Pages) void {
+        plug_state.pages.append(page) catch @panic("Failed to append page.");
+        plug_state.page = page;
+    }
+
+    pub fn goBack(plug_state: *PlugState) void {
+        _ = plug_state.pages.popOrNull();
+
+        if (plug_state.pages.items.len != 0) {
+            plug_state.page = plug_state.pages.items[plug_state.pages.items.len - 1];
+        }
+    }
+
+    pub fn loadConfig(plug_state: *PlugState) !UserSettings {
+        var file = try std.fs.cwd().openFile(".config", .{ .mode = .read_only });
+        defer file.close();
+
+        const content = try file.readToEndAlloc(plug_state.allocator.*, 999_999_999);
+        defer plug_state.allocator.free(content);
+
+        var settings = UserSettings.init();
+
+        var lineReader = std.mem.splitAny(u8, content, "\n");
+        while (lineReader.next()) |line| {
+            var lineSplitter = std.mem.splitAny(u8, std.mem.trim(u8, line, "\r\n \t"), "=");
+
+            const dirty_name = lineSplitter.next();
+            const dirty_value = lineSplitter.next();
+
+            if (dirty_name == null or dirty_value == null) {
+                continue;
+            }
+
+            const name = std.mem.trim(u8, dirty_name.?, "\r\n \t");
+            const value = std.mem.trim(u8, dirty_value.?, "\r\n \t");
+
+            if (std.mem.count(u8, name, "color") > 0) {
+                var valueSplitter = std.mem.splitAny(u8, value, " ");
+                const red_str = valueSplitter.next();
+                const green_str = valueSplitter.next();
+                const blue_str = valueSplitter.next();
+
+                if (red_str == null and green_str == null and blue_str == null) {
+                    continue;
+                }
+
+                const red = try std.fmt.parseInt(u8, std.mem.trim(u8, red_str.?, "\r\n \t"), 10);
+                const green = try std.fmt.parseInt(u8, std.mem.trim(u8, green_str.?, "\r\n \t"), 10);
+                const blue = try std.fmt.parseInt(u8, std.mem.trim(u8, blue_str.?, "\r\n \t"), 10);
+
+                const color = rl.Color.init(red, green, blue, 255);
+
+                const typeInfo = @typeInfo(UserSettings);
+                const structInfo = typeInfo.Struct;
+                {
+                    inline for (structInfo.fields) |field| {
+                        if (!comptime std.mem.eql(u8, field.name, "fps")) {
+                            if (std.mem.eql(u8, field.name, name)) {
+                                @field(settings, field.name) = color;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (std.mem.eql(u8, name, "fps")) {
+                const fps_value = try std.fmt.parseInt(i32, value, 10);
+                settings.fps = fps_value;
+            }
+        }
+
+        return settings;
+    }
+
+    pub fn saveConfig(plug_state: *PlugState) !void {
+        var file = try std.fs.cwd().createFile(".config", .{});
+        const writer = file.writer();
+        const typeInfo = @typeInfo(UserSettings);
+        const structInfo = typeInfo.Struct;
+        inline for (structInfo.fields) |field| {
+            if (comptime std.mem.eql(u8, field.name, "fps")) {
+                try writer.print("fps={}\n", .{plug_state.settings.fps});
+            } else if (field.type == rl.Color) {
+                const value = @field(plug_state.settings, field.name);
+                try writer.print("{s}={} {} {}\n", .{ field.name, value.r, value.g, value.b });
+            }
+
+            std.log.info("Field", .{});
+        }
+    }
+
+    pub fn log(plug_state: *PlugState, comptime format: []const u8, args: anytype, print_location: bool) void {
+        if (print_location) {
+            const info = std.debug.getSelfDebugInfo() catch @panic("Invalid debug info");
+            const addr = @returnAddress();
+            const tty: std.io.tty.Config = .no_color;
+            std.debug.printSourceAtAddress(info, plug_state.log_writer, addr, tty) catch @panic("Failed to print log location");
+        }
+
+        plug_state.log_writer.print(format, args) catch @panic("Failed to print");
+        plug_state.log_writer.print("\n", .{}) catch @panic("Failed to print");
+    }
+
+    pub inline fn log_info(plug_state: *PlugState, comptime format: []const u8, args: anytype) void {
+        log(plug_state, format, args, false);
+    }
+
+    pub inline fn log_error(plug_state: *PlugState, comptime format: []const u8, args: anytype) void {
+        log(plug_state, format, args, true);
     }
 };
 
@@ -125,7 +426,7 @@ inline fn complexAmpToNormalAmp(complex_amplitude: Complex(f32)) f32 {
 }
 
 // a frame is L+R | f32 takes both sides
-fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
+pub fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
     const frame_buffer: ?[*]const f32 = @ptrCast(@alignCast(buffer.?));
 
     if (frame_buffer == null) {
@@ -134,16 +435,16 @@ fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
     }
 
     const frame_count: usize = @intCast(frames);
-    const buffer_size: usize = frame_count * 2;
+    const buffer_size: usize = frame_count * global_plug_state.music.?.stream.channels;
     const data_buffer = (frame_buffer.?)[0..buffer_size];
 
-    CollectAudioSamplesZig(data_buffer);
+    CollectAudioSamplesZig(data_buffer, global_plug_state.music.?.stream.channels);
 }
 
-fn CollectAudioSamplesZig(samples: []const f32) void {
+pub fn CollectAudioSamplesZig(samples: []const f32, channels: usize) void {
     for (samples, 0..) |sample, i| {
-        if (i % 2 == 0) {
-            global_plug_state.temp_buffer[i / 2] = sample;
+        if (i % channels == 0) {
+            global_plug_state.temp_buffer[i / channels] = sample;
         }
     }
 
@@ -158,26 +459,26 @@ fn CollectAudioSamplesZig(samples: []const f32) void {
     std.mem.copyForwards(f32, target_write, sliced_data);
 }
 
-fn AnalyzeAudioSignal(delta_time: f32) usize {
+pub fn AnalyzeAudioSignal(plug_state: *PlugState, delta_time: f32) usize {
     // Smooth the audio
-    for (global_plug_state.samples, 0..) |sample, i| {
-        const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(global_plug_state.samples.len));
+    for (plug_state.samples, 0..) |sample, i| {
+        const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(plug_state.samples.len));
         const hann: f32 = 0.5 - 0.5 * std.math.cos(2 * std.math.pi * t);
-        global_plug_state.smooth_samples[i] = sample * hann;
+        plug_state.smooth_samples[i] = sample * hann;
     }
 
-    for (global_plug_state.smooth_samples, 0..) |sample, i| {
-        global_plug_state.complex_samples[i] = Complex(f32).init(sample, 0);
+    for (plug_state.smooth_samples, 0..) |sample, i| {
+        plug_state.complex_samples[i] = Complex(f32).init(sample, 0);
     }
 
-    root.FT.NoAllocFFT(global_plug_state.complex_amplitudes, global_plug_state.complex_samples);
+    root.FT.NoAllocFFT(plug_state.complex_amplitudes, plug_state.complex_samples);
 
-    global_plug_state.max_amplitude = 0;
-    for (global_plug_state.complex_amplitudes, 0..global_plug_state.complex_amplitudes.len) |complex_amplitude, i| {
-        global_plug_state.amplitudes[i] = complexAmpToNormalAmp(complex_amplitude);
+    plug_state.max_amplitude = 0;
+    for (plug_state.complex_amplitudes, 0..plug_state.complex_amplitudes.len) |complex_amplitude, i| {
+        plug_state.amplitudes[i] = complexAmpToNormalAmp(complex_amplitude);
 
-        if (global_plug_state.amplitudes[i] > global_plug_state.max_amplitude) {
-            global_plug_state.max_amplitude = global_plug_state.amplitudes[i];
+        if (plug_state.amplitudes[i] > plug_state.max_amplitude) {
+            plug_state.max_amplitude = plug_state.amplitudes[i];
         }
     }
 
@@ -186,126 +487,112 @@ fn AnalyzeAudioSignal(delta_time: f32) usize {
     const lowest_frequency: f32 = 1.0;
     var size: usize = 0;
     var frequency = lowest_frequency;
-    global_plug_state.max_log_amplitude = 0;
-    while (frequency < @as(f32, @floatFromInt(global_plug_state.samples.len)) / 2) : (frequency = std.math.ceil(frequency * frequency_step)) {
+    plug_state.max_log_amplitude = 0;
+    while (frequency < @as(f32, @floatFromInt(plug_state.samples.len)) / 2) : (frequency = std.math.ceil(frequency * frequency_step)) {
         const f1: f32 = std.math.ceil(frequency * frequency_step);
         var a: f32 = 0.0;
 
         var q: usize = @intFromFloat(frequency);
-        while (q < @divFloor(global_plug_state.samples.len, 2) and q < @as(usize, @intFromFloat(f1))) : (q += 1) {
-            const b: f32 = global_plug_state.amplitudes[q];
+        while (q < @divFloor(plug_state.samples.len, 2) and q < @as(usize, @intFromFloat(f1))) : (q += 1) {
+            const b: f32 = plug_state.amplitudes[q];
             if (b > a) a = b;
         }
 
-        if (global_plug_state.max_log_amplitude < a) global_plug_state.max_log_amplitude = a;
+        if (plug_state.max_log_amplitude < a) plug_state.max_log_amplitude = a;
 
-        global_plug_state.log_amplitudes[size] = a;
+        plug_state.log_amplitudes[size] = a;
         size += 1;
     }
 
     // Smooth out and smear the values
-    global_plug_state.max_smooth_amplitude = 0;
-    global_plug_state.max_smear_amplitude = 0;
+    plug_state.max_smooth_amplitude = 0;
+    plug_state.max_smear_amplitude = 0;
 
     for (0..size) |i| {
         const smoothness: f32 = 8;
-        global_plug_state.smooth_amplitudes[i] += (global_plug_state.log_amplitudes[i] - global_plug_state.smooth_amplitudes[i]) * smoothness * delta_time;
-        if (global_plug_state.max_smooth_amplitude < global_plug_state.smooth_amplitudes[i]) global_plug_state.max_smooth_amplitude = global_plug_state.smooth_amplitudes[i];
+        plug_state.smooth_amplitudes[i] += (plug_state.log_amplitudes[i] - plug_state.smooth_amplitudes[i]) * smoothness * delta_time;
+        if (plug_state.max_smooth_amplitude < plug_state.smooth_amplitudes[i]) plug_state.max_smooth_amplitude = plug_state.smooth_amplitudes[i];
 
         const smearness: f32 = 3;
-        global_plug_state.smear_amplitudes[i] += (global_plug_state.smooth_amplitudes[i] - global_plug_state.smear_amplitudes[i]) * smearness * delta_time;
-        if (global_plug_state.max_smear_amplitude < global_plug_state.smear_amplitudes[i]) global_plug_state.max_smear_amplitude = global_plug_state.smear_amplitudes[i];
+        plug_state.smear_amplitudes[i] += (plug_state.smooth_amplitudes[i] - plug_state.smear_amplitudes[i]) * smearness * delta_time;
+        if (plug_state.max_smear_amplitude < plug_state.smear_amplitudes[i]) plug_state.max_smear_amplitude = plug_state.smear_amplitudes[i];
     }
 
     return size;
 }
 
-export fn plugClose(plug_state_ptr: *anyopaque) void {
-    const plug_state: *PlugState = @ptrCast(@alignCast(plug_state_ptr));
+pub fn plugClose(plug_state: *PlugState) void {
+    if (plug_state.music) |music| {
+        rl.stopMusicStream(music);
+        rl.detachAudioStreamProcessor(music.stream, CollectAudioSamples);
+    }
 
-    rl.stopMusicStream(plug_state.music);
-    rl.detachAudioStreamProcessor(plug_state.music.stream, CollectAudioSamples);
-    UnloadShaders();
     plug_state.deinit();
 }
 
-export fn plugInit(plug_state_ptr: *anyopaque) void {
-    const plug_state: *PlugState = @ptrCast(@alignCast(plug_state_ptr));
+pub fn plugInit(plug_state: *PlugState) void {
     global_plug_state = plug_state;
-
-    plug_state.music = rl.loadMusicStream("music/MusicMoment.wav");
-    rl.attachAudioStreamProcessor(plug_state.music.stream, CollectAudioSamples);
-
-    std.debug.print("Music Frames: {}", .{plug_state.music.frameCount});
-    rl.playMusicStream(plug_state.music);
-
+    plug_state.settings = plug_state.loadConfig() catch blk: {
+        plug_state.saveConfig() catch {
+            plug_state.log_error("Failed to setup Config.", .{});
+        };
+        break :blk PlugState.UserSettings.init();
+    };
+    rl.setTargetFPS(plug_state.settings.fps); // Set our game to run at 60 frames-per-second
     rl.setTraceLogLevel(.warning);
+    plug_state.NavigateTo(.SelectionMenu);
 
-    LoadShaders() catch @panic("We fucked up");
+    SetupGuiStyle(plug_state);
+    rl.setExitKey(.null);
+
+    plug_state.LoadSongList() catch |err| {
+        plug_state.log("Failed to load Song List.", .{}, true);
+        plug_state.log_info("Error: {}", .{err});
+        @panic("Error: Failed to load Song list.");
+    };
+
+    plug_state.LoadShaders() catch |err| {
+        plug_state.log("Failed to load Shader List.", .{}, true);
+        plug_state.log_info("Error: {}", .{err});
+        @panic("Error: Failed to load Shader list.");
+    };
 }
 
-fn AdaptString(text: []const u8) [:0]const u8 {
+fn SetupGuiStyle(plug_state: *PlugState) void {
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.base_color_normal), plug_state.settings.back_color.toInt());
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.border_color_normal), plug_state.settings.front_color.toInt());
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.text_color_normal), plug_state.settings.front_color.toInt());
+
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.base_color_pressed), plug_state.settings.back_color.toInt());
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.border_color_pressed), plug_state.settings.pressed_color.toInt());
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.text_color_pressed), plug_state.settings.pressed_color.toInt());
+
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.base_color_focused), plug_state.settings.back_color.toInt());
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.border_color_focused), plug_state.settings.focused_color.toInt());
+    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.text_color_focused), plug_state.settings.focused_color.toInt());
+
+    rg.guiSetStyle(.listview, @intFromEnum(rg.GuiControlProperty.border_color_focused), plug_state.settings.front_color.toInt());
+    rg.guiSetStyle(.listview, @intFromEnum(rg.GuiControlProperty.border_color_pressed), plug_state.settings.front_color.toInt());
+}
+
+pub fn AdaptString(text: []const u8) [:0]const u8 {
     std.mem.copyForwards(u8, &zero_terminated_buffer, text);
     zero_terminated_buffer[text.len] = 0;
     return zero_terminated_buffer[0..text.len :0];
 }
 
-fn AdaptStringAlloc(allocator: *std.mem.Allocator, text: []const u8) ![:0]const u8 {
+pub fn AdaptStringAlloc(allocator: *std.mem.Allocator, text: []const u8) ![:0]const u8 {
     var zero_terminated_text = try allocator.alloc(u8, text.len + 1);
     std.mem.copyForwards(u8, zero_terminated_text, text);
     zero_terminated_text[text.len] = 0;
     return zero_terminated_text[0..text.len :0];
 }
 
-fn LoadShaders() !void {
-    var shaders_dir = try std.fs.cwd().openDir("./shaders", .{ .iterate = true });
-    defer shaders_dir.close();
-
-    var walker = try shaders_dir.walk(global_plug_state.allocator.*);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        const path: []const u8 = try shaders_dir.realpath(entry.path, &text_buffer);
-        const valid_path = try AdaptStringAlloc(global_plug_state.allocator, path);
-
-        const name = try global_plug_state.allocator.dupe(u8, entry.basename);
-
-        try global_plug_state.shaders.append(.{ .filename = name, .shader = rl.loadShader(null, valid_path) });
-    }
-}
-
-fn UnloadShaders() void {
-    for (global_plug_state.shaders.items) |shaderInfo| {
-        rl.unloadShader(shaderInfo.shader);
-        global_plug_state.allocator.free(shaderInfo.filename);
-    }
-
-    global_plug_state.shaders.clearRetainingCapacity();
-}
-
-export fn startHotReloading(plug_state_ptr: *anyopaque) void {
-    const plug_state: *PlugState = @ptrCast(@alignCast(plug_state_ptr));
-    _ = plug_state;
-
-    rl.detachAudioStreamProcessor(global_plug_state.music.stream, CollectAudioSamples);
-
-    std.log.debug("Detached Audio", .{});
-}
-
-export fn endHotReloading(plug_state_ptr: *anyopaque) void {
-    const plug_state: *PlugState = @ptrCast(@alignCast(plug_state_ptr));
-
-    global_plug_state = plug_state;
-    rl.attachAudioStreamProcessor(plug_state.music.stream, CollectAudioSamples);
-
-    std.log.debug("Ended Hot reloading s2", .{});
-}
-
 fn limitFrequencyRange(plug_state: *PlugState, min: f32, max: f32) []const f32 {
     const amplitudes = plug_state.*.amplitudes;
     const amplitude_cutoff = (amplitudes.len / 2) + 1;
     const valid_amps = amplitudes[0..amplitude_cutoff];
-    const sample_rate: f32 = @floatFromInt(global_plug_state.music.stream.sampleRate);
+    const sample_rate: f32 = @floatFromInt(plug_state.music.?.stream.sampleRate);
     const sample_size: f32 = @floatFromInt(plug_state.*.samples.len);
     const frequency_step: f32 = sample_rate / sample_size;
 
@@ -321,372 +608,77 @@ fn limitFrequencyRange(plug_state: *PlugState, min: f32, max: f32) []const f32 {
     return valid_amps[min_index..max_index];
 }
 
-fn handleInput(plug_state: *PlugState) void {
-    if (rl.isKeyPressed(.s)) {
-        plug_state.shader = if (plug_state.shader != null) null else plug_state.shaders.items[plug_state.shader_index];
-    }
+pub fn getAmplitudesToRender(plug_state: *PlugState, delta_time: f32) struct { amps: []const f32, max: f32 } {
+    const size = AnalyzeAudioSignal(plug_state, delta_time);
 
-    if (plug_state.shader != null) {
-        if (rl.isKeyPressed(.left)) {
-            plug_state.shader_index = if (plug_state.shader_index == 0) plug_state.shaders.items.len - 1 else plug_state.shader_index - 1;
-        } else if (rl.isKeyPressed(.right)) {
-            plug_state.shader_index = (plug_state.shader_index + 1) % plug_state.shaders.items.len;
-        }
-
-        plug_state.shader = plug_state.shaders.items[plug_state.shader_index];
-    }
-
-    if (rl.isKeyDown(.down)) {
-        plug_state.amplify -= 0.01;
-    } else if (rl.isKeyDown(.up)) {
-        plug_state.amplify += 0.01;
-    }
-
-    if (rl.isKeyPressed(.enter)) {
-        plug_state.renderMode = switch (plug_state.renderMode) {
-            .lines => .circle,
-            .circle => .bars,
-            .bars => .lines,
-        };
-    }
-
-    if (rl.isKeyPressed(.r)) {
-        UnloadShaders();
-        LoadShaders() catch @panic("Massive Error");
-    }
-
-    if (rl.isKeyPressed(.l)) {
-        plug_state.toggleLines = !plug_state.toggleLines;
-    }
-
-    if (rl.isKeyPressed(.t)) {
-        plug_state.renderInfo = !plug_state.renderInfo;
-    }
-
-    if (rl.isKeyPressed(.p)) {
-        rl.pauseMusicStream(plug_state.music);
-        RenderVideoWithFFMPEG();
-        rl.resumeMusicStream(plug_state.music);
-    }
-
-    if (rl.isKeyPressed(.space)) {
-        plug_state.pause = !plug_state.pause;
-        if (plug_state.pause) {
-            rl.pauseMusicStream(plug_state.music);
-        } else {
-            rl.resumeMusicStream(plug_state.music);
-        }
-    }
-
-    if (rl.isKeyPressed(.page_down)) {
-        plug_state.processingMode = switch (plug_state.processingMode) {
-            .normal => .smooth,
-            .log => .normal,
-            .smear => .log,
-            .smooth => .smear,
-        };
-    }
-
-    if (rl.isKeyPressed(.page_up)) {
-        plug_state.processingMode = switch (plug_state.processingMode) {
-            .normal => .log,
-            .log => .smear,
-            .smear => .smooth,
-            .smooth => .normal,
-        };
-    }
-}
-
-fn getAmplitudesToRender(mode: ProcessingMode, delta_time: f32) struct { amps: []const f32, max: f32 } {
-    const size = AnalyzeAudioSignal(delta_time);
-
-    const amplitudes = switch (mode) {
-        .normal => limitFrequencyRange(global_plug_state, 200, 3000),
-        .log => global_plug_state.log_amplitudes[0..size],
-        .smooth => global_plug_state.smooth_amplitudes[0..size],
-        .smear => global_plug_state.smear_amplitudes[0..size],
+    const amplitudes = switch (plug_state.processing_mode) {
+        .normal => limitFrequencyRange(plug_state, 200, 3000),
+        .log => plug_state.log_amplitudes[0..size],
+        .smooth => plug_state.smooth_amplitudes[0..size],
+        .smear => plug_state.smear_amplitudes[0..size],
     };
 
-    const max_amplitude = switch (mode) {
-        .normal => global_plug_state.max_amplitude,
-        .log => global_plug_state.max_log_amplitude,
-        .smooth => global_plug_state.max_smooth_amplitude,
-        .smear => global_plug_state.max_smear_amplitude,
+    const max_amplitude = switch (plug_state.processing_mode) {
+        .normal => plug_state.max_amplitude,
+        .log => plug_state.max_log_amplitude,
+        .smooth => plug_state.max_smooth_amplitude,
+        .smear => plug_state.max_smear_amplitude,
     };
 
     return .{ .amps = amplitudes, .max = max_amplitude };
 }
 
-export fn plugUpdate(plug_state_ptr: *anyopaque) void {
-    const plug_state: *PlugState = @ptrCast(@alignCast(plug_state_ptr));
-
-    // Music Polling
-    //----------------------------------------------------------------------------------
-    rl.updateMusicStream(plug_state.music);
-    //----------------------------------------------------------------------------------
-
-    handleInput(plug_state);
-
-    {
-        const delta_time = rl.getFrameTime();
-        const amp_data = getAmplitudesToRender(plug_state.processingMode, delta_time);
-        RenderFrameToTexture(plug_state.texture_target, amp_data.amps, amp_data.max);
-
-        if (plug_state.outputMode == .screen) {
-            PrintTextureToScreen(plug_state.texture_target);
-        }
+pub fn plugUpdate(plug_state: *PlugState) void {
+    if (plug_state.music) |music| {
+        // Music Polling
+        //----------------------------------------------------------------------------------
+        rl.updateMusicStream(music);
+        //----------------------------------------------------------------------------------
     }
-}
-
-fn CalculateLinePointPositions(bottom_points: []rl.Vector2, top_points: []rl.Vector2, points_size: usize, point_counter: usize, x_offset: i32, y_offset: i32, posX: i32, posY: i32) void {
-    const offset = rl.Vector2.init(@floatFromInt(x_offset), @floatFromInt(y_offset));
-    const lastPoint = if (point_counter == 0) rl.Vector2.init(@floatFromInt(posX), @floatFromInt(posY)) else bottom_points[points_size / 2 + point_counter - 1].subtract(offset);
-    const previousPosX = @as(i32, @intFromFloat(lastPoint.x));
-    const previousPosY = @as(i32, @intFromFloat(lastPoint.y));
-
-    bottom_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(x_offset + posX), @floatFromInt(y_offset + posY));
-    bottom_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(x_offset - posX), @floatFromInt(y_offset + posY));
-
-    top_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(x_offset + posX), @floatFromInt(y_offset - posY));
-    top_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(x_offset - posX), @floatFromInt(y_offset - posY));
-
-    if (global_plug_state.toggleLines) {
-        rl.drawLine(x_offset - previousPosX, y_offset - previousPosY, x_offset - posX, y_offset + posY, rl.Color.green);
-        rl.drawLine(x_offset + previousPosX, y_offset - previousPosY, x_offset + posX, y_offset + posY, rl.Color.green);
-    }
-}
-
-fn CalculateCirclePointPositions(bottom_points: []rl.Vector2, top_points: []rl.Vector2, points_size: usize, point_counter: usize, x_offset: i32, y_offset: i32, height: i32, angle: f64) void {
-    const base_radius: i32 = 100;
-    const inner_radius = base_radius - 80;
-    const radius = @as(f64, @floatFromInt(height + base_radius));
-
-    const circle_offset_y = y_offset;
-    const circle_offset_x = x_offset;
-
-    const circle_posY = @as(i32, @intFromFloat(radius * std.math.sin(angle)));
-    const circle_posX = @as(i32, @intFromFloat(radius * std.math.cos(angle)));
-
-    const inner_circle_posY = @as(i32, @intFromFloat(inner_radius * std.math.sin(angle)));
-    const inner_circle_posX = @as(i32, @intFromFloat(inner_radius * std.math.cos(angle)));
-
-    bottom_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(circle_offset_x - circle_posX), @floatFromInt(circle_offset_y - circle_posY));
-    bottom_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(circle_offset_x - circle_posX), @floatFromInt(circle_offset_y + circle_posY));
-
-    top_points[points_size / 2 + point_counter] = rl.Vector2.init(@floatFromInt(circle_offset_x + circle_posX), @floatFromInt(circle_offset_y - circle_posY));
-    top_points[points_size / 2 - point_counter - 1] = rl.Vector2.init(@floatFromInt(circle_offset_x + circle_posX), @floatFromInt(circle_offset_y + circle_posY));
-
-    if (global_plug_state.toggleLines) {
-        rl.drawLine(circle_offset_x - inner_circle_posX - @divFloor(circle_posX, 4), circle_offset_y + inner_circle_posY + @divFloor(circle_posY, 4), circle_offset_x - circle_posX, circle_offset_y + circle_posY, rl.Color.green);
-        rl.drawLine(circle_offset_x + inner_circle_posX + @divFloor(circle_posX, 4), circle_offset_y + inner_circle_posY + @divFloor(circle_posY, 4), circle_offset_x + circle_posX, circle_offset_y + circle_posY, rl.Color.green);
-        rl.drawLine(circle_offset_x - inner_circle_posX - @divFloor(circle_posX, 4), circle_offset_y - inner_circle_posY - @divFloor(circle_posY, 4), circle_offset_x - circle_posX, circle_offset_y - circle_posY, rl.Color.green);
-        rl.drawLine(circle_offset_x + inner_circle_posX + @divFloor(circle_posX, 4), circle_offset_y - inner_circle_posY - @divFloor(circle_posY, 4), circle_offset_x + circle_posX, circle_offset_y - circle_posY, rl.Color.green);
-    }
-}
-
-fn RenderFrameToTexture(texture: rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32) void {
-    const amount_of_points: u64 = 50;
-    const samples_per_point: u64 = (amplitudes.len) / amount_of_points;
-    const points_size = (amount_of_points + 1) * 2;
-
-    var bottom_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
-    var top_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
-
-    const line_length: f64 = @as(f64, @floatFromInt(rl.getRenderWidth())) / 2.0;
-    const line_step: f64 = line_length / @as(f64, @floatFromInt(amount_of_points));
-    const circle_angle_step = std.math.pi / @as(f64, @floatFromInt(amount_of_points));
-
-    const y_offset: i32 = @as(i32, @divFloor(rl.getRenderHeight(), 2));
-    const x_offset: i32 = @intFromFloat(line_length);
-    const max_height: f64 = @as(f64, @floatFromInt(rl.getRenderHeight())) / 3.0;
-
-    var index: u64 = 0;
-
-    var previousPosX: i32 = 0;
-    var previousPosY: i32 = 0;
-
-    var point_counter: usize = 0;
-
-    {
-        rl.beginTextureMode(texture);
-        defer rl.endTextureMode();
-
-        rl.clearBackground(rl.Color.black);
-
-        while (index < amplitudes.len and samples_per_point > 0 and max_amplitude > 0 and point_counter < points_size / 2) : (index += samples_per_point) {
-            defer point_counter += 1;
-
-            var line_total: f32 = 0;
-
-            var stop = index + samples_per_point;
-
-            if (stop > amplitudes.len) {
-                stop = amplitudes.len;
+    switch (plug_state.page) {
+        .SelectionMenu => {
+            menu.RenderSelectionMenuPage(plug_state);
+        },
+        .Visualizer => {
+            if (plug_state.music != null) {
+                visualizer.RenderVisualizerPage(plug_state);
             }
-
-            for (index..stop) |value| {
-                const amplitude = amplitudes[value];
-                line_total += amplitude;
-            }
-
-            const height: i32 = @intFromFloat(max_height * global_plug_state.amplify * 1 * ((line_total / @as(f32, @floatFromInt(samples_per_point)))) / max_amplitude);
-
-            const posY = height;
-            const posX = @as(i32, @intFromFloat(line_step)) * @as(i32, @intCast(point_counter));
-
-            switch (global_plug_state.renderMode) {
-                .lines => {
-                    CalculateLinePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, posX, posY);
-                },
-                .circle => {
-                    const angle = circle_angle_step * @as(f64, @floatFromInt(point_counter));
-                    CalculateCirclePointPositions(&bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, height, angle);
-                },
-                .bars => {
-                    rl.drawRectangle(x_offset - posX, y_offset - posY, @intFromFloat(line_step), height, rl.Color.green);
-                    rl.drawRectangle(x_offset + posX, y_offset - posY, @intFromFloat(line_step), height, rl.Color.green);
-                    rl.drawRectangle(x_offset - posX, y_offset, @intFromFloat(line_step), height, rl.Color.green);
-                    rl.drawRectangle(x_offset + posX, y_offset, @intFromFloat(line_step), height, rl.Color.green);
-                },
-            }
-
-            if (global_plug_state.renderMode == .lines) {} else previousPosX = posX;
-            previousPosY = posY;
-        }
-
-        if (global_plug_state.renderMode == .lines or global_plug_state.renderMode == .circle) {
-            rl.drawLineStrip(&bottom_points, rl.Color.green);
-            rl.drawLineStrip(&top_points, rl.Color.green);
-        }
+        },
+        .Settings => {
+            settings_page.RenderSettingsPage(plug_state);
+        },
     }
 }
 
-// const image = rl.loadImageFromTexture(texture.texture);
-// defer rl.unloadImage(image);
-// _ = rl.exportImage(image, "Screen.png");
-
-fn PrintTextureToScreen(texture: rl.RenderTexture) void {
+pub fn PrintTextureToScreen(plug_state: *PlugState, texture: rl.RenderTexture, infoRender: ?(fn (plug_state: *PlugState) void)) void {
     rl.beginDrawing();
     defer rl.endDrawing();
 
-    if (global_plug_state.shader != null) {
-        rl.beginShaderMode(global_plug_state.shader.?.shader);
-        defer rl.endShaderMode();
-        rl.drawTextureRec(texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
-    } else {
-        rl.drawTextureRec(texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
-    }
-    WriteInfo();
-}
+    rl.drawTextureRec(texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
 
-fn WriteInfo() void {
-    if (global_plug_state.renderInfo) {
-        const name = if (global_plug_state.shader) |shader| shader.filename else "None";
-
-        const output = std.fmt.bufPrint(&text_buffer, "Shader: {s}", .{name}) catch @panic("BAD");
-        const text = AdaptString(output);
-
-        rl.drawText(text, 10, 30, 16, rl.Color.green);
-
-        const output_amp = std.fmt.bufPrint(&text_buffer, "Amplitude: {d:.2}", .{global_plug_state.amplify}) catch @panic("BAD");
-        const text_amp = AdaptString(output_amp);
-
-        rl.drawText(text_amp, 10, 50, 16, rl.Color.green);
-
-        switch (global_plug_state.processingMode) {
-            .normal => rl.drawText("Processing: Normal", 10, 70, 16, rl.Color.green),
-            .log => rl.drawText("Processing: Log", 10, 70, 16, rl.Color.green),
-            .smooth => rl.drawText("Processing: Smooth", 10, 70, 16, rl.Color.green),
-            .smear => rl.drawText("Processing: Smear", 10, 70, 16, rl.Color.green),
-        }
-
-        switch (global_plug_state.renderMode) {
-            .circle => rl.drawText("Rendering: Circle", 10, 90, 16, rl.Color.green),
-            .lines => rl.drawText("Rendering: Lines", 10, 90, 16, rl.Color.green),
-            .bars => rl.drawText("Rendering: Bars", 10, 90, 16, rl.Color.green),
-        }
-
-        rl.drawText(rl.RAYLIB_VERSION, 10, 110, 16, rl.Color.green);
+    if (infoRender) |renderIndo| {
+        renderIndo(plug_state);
     }
 }
 
-fn PrintToImage(input_texture: rl.RenderTexture) rl.Image {
-    const output_texture = global_plug_state.output_target;
+pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTexture2D, output_texture: rl.RenderTexture2D) void {
     rl.beginTextureMode(output_texture);
+    defer rl.endTextureMode();
 
-    if (global_plug_state.shader) |shader| {
+    if (plug_state.shader) |shader| {
         rl.beginShaderMode(shader.shader);
         defer rl.endShaderMode();
         rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
     } else {
         rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
     }
-    WriteInfo();
+}
 
-    rl.endTextureMode();
+pub fn PrintToImage(input_texture: rl.RenderTexture, output_texture: rl.RenderTexture) rl.Image {
+    rl.beginTextureMode(output_texture);
+    defer rl.endTextureMode();
+
+    rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
 
     return rl.loadImageFromTexture(output_texture.texture);
-}
-
-fn ClearFFT() void {
-    for (0..global_plug_state.samples.len) |i| {
-        global_plug_state.samples[i] = 0.0;
-        global_plug_state.smooth_amplitudes[i] = 0.0;
-        global_plug_state.smear_amplitudes[i] = 0.0;
-        global_plug_state.smooth_samples[i] = 0.0;
-        global_plug_state.log_amplitudes[i] = 0.0;
-        global_plug_state.complex_amplitudes[i] = Complex(f32).init(0, 0);
-        global_plug_state.complex_samples[i] = Complex(f32).init(0, 0);
-    }
-}
-
-fn RenderVideoWithFFMPEG() void {
-    const argv = [_][]const u8{ "ffmpeg", "-loglevel", "verbose", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", "60", "-i", "-", "-i", "music/MusicMoment.wav", "-c:v", "libx264", "-b:v", "25000k", "-c:a", "aac", "-b:a", "200k", "output.mp4" };
-    var proc = std.process.Child.init(&argv, global_plug_state.allocator.*);
-    proc.stdin_behavior = .Pipe;
-    proc.spawn() catch @panic("Failed ffmpeg launch");
-
-    const audio = rl.loadWave("music/MusicMoment.wav");
-    defer rl.unloadWave(audio);
-
-    ClearFFT();
-
-    var processed_frames: usize = 0;
-    const frame_rate: usize = 60;
-    const frame_count: usize = @intCast(audio.frameCount);
-    const sampling_rate: usize = @intCast(audio.sampleRate);
-    const sample_buffer = rl.loadWaveSamples(audio);
-
-    const standard_frame_step: usize = @divFloor(sampling_rate, frame_rate);
-
-    std.log.info("\nVisualizer Data: {} {} {} {} {}\n", .{ sample_buffer.len, audio.frameCount, audio.sampleSize, audio.sampleRate, standard_frame_step });
-
-    var frame_step: usize = 0;
-    var counter: usize = 0;
-    const delta_time = 1 / frame_rate;
-
-    while (frame_count > processed_frames) : (processed_frames += frame_step) {
-        defer counter += 1;
-        frame_step = if (frame_count - processed_frames > standard_frame_step) standard_frame_step else frame_count - processed_frames;
-
-        const amp_data = getAmplitudesToRender(global_plug_state.processingMode, delta_time);
-        RenderFrameToTexture(global_plug_state.texture_target, amp_data.amps, amp_data.max);
-        const image = PrintToImage(global_plug_state.texture_target);
-        defer rl.unloadImage(image);
-
-        const pixels_raw: [*]const u8 = @ptrCast(@alignCast(image.data));
-
-        const pixels: []const u8 = pixels_raw[0 .. 1920 * 1080 * 4];
-        _ = proc.stdin.?.write(pixels) catch @panic("Bad Pipe!");
-
-        const sampled_frames = sample_buffer[processed_frames * audio.channels .. (processed_frames + frame_step) * audio.channels];
-        CollectAudioSamplesZig(sampled_frames);
-    }
-    std.log.info("Ended: Finished Rendering Frames: {}\n", .{counter});
-
-    proc.stdin.?.close();
-    proc.stdin = null;
-
-    _ = proc.wait() catch @panic("Can't wait for process.");
-    std.log.info("Rendering Done. \n", .{});
 }

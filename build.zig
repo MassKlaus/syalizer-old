@@ -16,17 +16,18 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-    const raylib_dep = b.dependency("raylib-zig", .{ .target = target, .optimize = optimize, .shared = true });
+    const raylib_dep = b.dependency("raylib-zig", .{ .target = target, .optimize = optimize });
 
     const raylib = raylib_dep.module("raylib"); // main raylib module
     const raygui = raylib_dep.module("raygui"); // raygui module
     const raylib_artifact = raylib_dep.artifact("raylib"); // raylib C library
+    raylib_artifact.defineCMacro("SUPPORT_FILEFORMAT_FLAC", null);
     b.installArtifact(raylib_artifact);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
-    const lib = b.addSharedLibrary(.{
+    const lib = b.addStaticLibrary(.{
         .name = "syalizer.root",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
@@ -42,9 +43,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    exe.linkLibrary(lib);
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
+    // step when running `zig build`)
     exe.linkLibrary(raylib_artifact);
     exe.root_module.addImport("raylib", raylib);
     exe.root_module.addImport("raygui", raygui);
@@ -73,8 +75,6 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     if (!plug_only) {
-        b.installArtifact(exe);
-        b.installArtifact(lib);
         b.installDirectory(.{ .source_dir = b.path("./shaders/"), .install_dir = .prefix, .install_subdir = "bin/shaders" });
     }
 
@@ -89,7 +89,8 @@ pub fn build(b: *std.Build) void {
     pluglib.linkLibrary(raylib_artifact);
     pluglib.root_module.addImport("raylib", raylib);
     pluglib.root_module.addImport("raygui", raygui);
-    b.installArtifact(pluglib);
+
+    b.installArtifact(exe);
 
     // Creates a step for unit testing. This only builds the test executable
 

@@ -14,7 +14,11 @@ void main()
 
     vec3 color = texture(texture0, uv).rgb;
 
-    const int range = 1;
+    const int range = 5;
+
+    vec2 found_pixel = vec2(0);
+    float min_length = 100;
+
     // Accumulate bloom effect
     if(color == vec3(0.0)) {
         for (int i = -range; i <= range; i++) {
@@ -23,9 +27,19 @@ void main()
 
                 if(sub_og_color != vec3(0.0)) {
                     color = sub_og_color;
+                    found_pixel = vec2(float(i), float(j));
+                    float len = length(found_pixel);
+
+                    if(min_length > len) {
+                        min_length = len;
+                    }
                 }
             }
         }
+    }
+
+    if (found_pixel != vec2(0)) {
+        color = color / (1 + min_length);
     }
 
     fragColor = vec4(color, 1.0);

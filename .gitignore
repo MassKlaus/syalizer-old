@@ -4,3 +4,5 @@ music/*
 !music/README.md
 *.mp4
 *.jpg
+.config
+*output*
