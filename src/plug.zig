@@ -213,18 +213,23 @@ pub const PlugState = struct {
         defer walker.deinit();
         self.log("Shaders Walker Created", .{}, false);
 
-        while (walker.next() catch |err| {
-            self.log_error("Failed to fetch next file entry from walker.", .{});
+        while (walker.next()) |Optionalentry| {
+            if (Optionalentry) |entry| {
+                self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
+
+                const path: []const u8 = try shaders_dir.realpath(entry.path, &text_buffer);
+                const valid_path = try AdaptStringAlloc(self.allocator, path);
+                defer self.allocator.free(valid_path);
+
+                const name = try AdaptStringAlloc(self.allocator, entry.basename);
+                try self.shaders.append(.{ .filename = name, .shader = rl.loadShader(null, valid_path) });
+                continue;
+            }
+
+            break;
+        } else |err| {
+            self.log_error("Walker Errored. {}", .{err});
             return err;
-        }) |entry| {
-            self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
-
-            const path: []const u8 = try shaders_dir.realpath(entry.path, &text_buffer);
-            const valid_path = try AdaptStringAlloc(self.allocator, path);
-            defer self.allocator.free(valid_path);
-
-            const name = try AdaptStringAlloc(self.allocator, entry.basename);
-            try self.shaders.append(.{ .filename = name, .shader = rl.loadShader(null, valid_path) });
         }
 
         self.log_info("{} Shaders Loaded", .{self.shaders.items.len});
@@ -263,13 +268,21 @@ pub const PlugState = struct {
 
         self.log("Music Walker Created", .{}, false);
 
-        while (try walker.next()) |entry| {
-            self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
-            const path: []const u8 = try songs_dir.realpath(entry.path, &text_buffer);
-            const valid_path = try AdaptStringAlloc(self.allocator, path);
-            const name = try AdaptStringAlloc(self.allocator, entry.basename);
+        while (walker.next()) |Optionalentry| {
+            if (Optionalentry) |entry| {
+                self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
+                const path: []const u8 = try songs_dir.realpath(entry.path, &text_buffer);
+                const valid_path = try AdaptStringAlloc(self.allocator, path);
+                const name = try AdaptStringAlloc(self.allocator, entry.basename);
 
-            try self.songs.append(.{ .filename = name, .path = valid_path });
+                try self.songs.append(.{ .filename = name, .path = valid_path });
+                continue;
+            }
+
+            break;
+        } else |err| {
+            self.log_error("Walker Errored. {}", .{err});
+            return err;
         }
 
         self.log_info("{} Songs Loaded", .{self.songs.items.len});

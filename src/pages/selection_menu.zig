@@ -63,13 +63,9 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
         const mousePosition = rl.getMousePosition();
 
         if (rg.guiButton(buttonRec, text) != 0) {
-            std.log.info("Clicked: {s}", .{song.path});
+            plug_state.log_info("Song \"{s}\" Selected.", .{song.path});
 
             const music = rl.loadMusicStream(song.path);
-
-            if (rl.isMusicValid(music)) {
-                std.log.info("Valid Song {s}", .{song.path});
-            }
 
             plug_state.music = music;
             plug_state.song = song;

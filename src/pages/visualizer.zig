@@ -28,15 +28,17 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
             &plug_state.shaders.items[plug_state.shader_index]
         else
             null;
+
+        plug_state.log_info("Toggling Shader state: {}", .{plug_state.shader == null});
     }
 
     if (plug_state.shader != null) {
         if (rl.isKeyPressed(.left)) {
             plug_state.shader_index = if (plug_state.shader_index == 0) plug_state.shaders.items.len - 1 else plug_state.shader_index - 1;
-            plug_state.log_info("Loaded shader: {s}", .{plug_state.shaders.items[plug_state.shader_index].filename});
+            plug_state.log_info("Loaded shader: \"{s}\"", .{plug_state.shaders.items[plug_state.shader_index].filename});
         } else if (rl.isKeyPressed(.right)) {
             plug_state.shader_index = (plug_state.shader_index + 1) % plug_state.shaders.items.len;
-            plug_state.log_info("Loaded shader: {s}", .{plug_state.shaders.items[plug_state.shader_index].filename});
+            plug_state.log_info("Loaded shader: \"{s}\"", .{plug_state.shaders.items[plug_state.shader_index].filename});
         }
 
         plug_state.shader = &plug_state.shaders.items[plug_state.shader_index];
