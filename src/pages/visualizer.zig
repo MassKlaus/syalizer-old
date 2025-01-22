@@ -22,6 +22,11 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
         plug_state.goBack();
     }
 
+    if (rl.isKeyPressed(.m)) {
+        plug_state.music_volume = if (plug_state.music_volume != 0) 0 else rl.getMasterVolume();
+        rl.setMusicVolume(plug_state.music.?, plug_state.music_volume);
+    }
+
     if (rl.isKeyPressed(.s)) {
         plug_state.shader_index = 0;
         plug_state.shader = if (plug_state.shader == null and plug_state.shader_index < plug_state.shaders.items.len)
@@ -121,7 +126,7 @@ pub fn RenderVisualizerPage(plug_state: *PlugState) void {
 
             RenderVisualizerFrameToTexture(plug_state, plug_state.render_texture, amp_data.amps, amp_data.max);
             plug.ApplyShadersToTexture(plug_state, plug_state.render_texture, plug_state.shader_texture);
-            plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerInfo);
+            plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerData);
         },
         .video => {
             RenderVisualizeVideoWithFFMPEG(plug_state);
@@ -179,7 +184,7 @@ fn CalculateCirclePointPositions(plug_state: *PlugState, bottom_points: []rl.Vec
 
 fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32) void {
     const amount_of_points: u64 = 50;
-    const samples_per_point: u64 = (amplitudes.len) / amount_of_points;
+    const samples_per_point: u64 = @divFloor(amplitudes.len, amount_of_points);
     const points_size = (amount_of_points + 1) * 2;
 
     var bottom_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
@@ -289,8 +294,6 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
 
     plug_state.render_total_frames = @divExact(@as(f32, @floatFromInt(frame_count)), @as(f32, @floatFromInt(standard_frame_step)));
 
-    std.log.info("Visualizer Data: {} {} {} {} {}\n", .{ sample_buffer.len, audio.frameCount, audio.sampleSize, audio.sampleRate, standard_frame_step });
-
     var frame_step: usize = 0;
     var counter: usize = 0;
     const delta_time = 1.0 / @as(f32, @floatFromInt(frame_rate));
@@ -309,7 +312,7 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
         const image = rl.loadImageFromTexture(plug_state.shader_texture.texture);
         defer rl.unloadImage(image);
 
-        plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerInfo);
+        plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerData);
 
         const pixels_raw: [*]const u8 = @ptrCast(@alignCast(image.data));
 
@@ -340,6 +343,11 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
 }
 
 fn RenderVisualizerInfo(plug_state: *PlugState) void {
+    RenderVisualizerData(plug_state);
+    RenderVisualizerUI(plug_state);
+}
+
+fn RenderVisualizerData(plug_state: *PlugState) void {
     if (plug_state.render_info) {
         const name = if (plug_state.shader) |shader| shader.filename else "None";
 
@@ -380,4 +388,8 @@ fn RenderVisualizerInfo(plug_state: *PlugState) void {
 
 fn RenderVisualizerUI(plug_state: *PlugState) void {
     if (!plug_state.view_UI) return;
+
+    if (plug_state.shader) |_| {
+        _ = rg.guiButton(rl.Rectangle.init(1720, 50, 50, 50), "Something");
+    }
 }

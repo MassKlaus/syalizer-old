@@ -110,6 +110,7 @@ pub const PlugState = struct {
 
     // Music Currently Handling
     music: ?rl.Music = null,
+    music_volume: f32 = 50,
     songs: std.ArrayList(SongInfo),
     song: ?*SongInfo = null,
     preview_song: ?*SongInfo = null,
@@ -461,10 +462,10 @@ pub fn CollectAudioSamplesZig(samples: []const f32, channels: usize) void {
         }
     }
 
-    var sliced_data: []const f32 = global_plug_state.temp_buffer[0 .. samples.len / 2];
+    var sliced_data: []const f32 = global_plug_state.temp_buffer[0..@divFloor(samples.len, channels)];
 
     if (sliced_data.len > global_plug_state.samples.len) {
-        sliced_data = sliced_data[(sliced_data.len - global_plug_state.samples.len)..sliced_data.len];
+        sliced_data = sliced_data[(sliced_data.len - global_plug_state.samples.len)..];
     }
 
     std.mem.rotate(f32, global_plug_state.samples, sliced_data.len);
@@ -474,6 +475,7 @@ pub fn CollectAudioSamplesZig(samples: []const f32, channels: usize) void {
 
 pub fn AnalyzeAudioSignal(plug_state: *PlugState, delta_time: f32) usize {
     // Smooth the audio
+
     for (plug_state.samples, 0..) |sample, i| {
         const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(plug_state.samples.len));
         const hann: f32 = 0.5 - 0.5 * std.math.cos(2 * std.math.pi * t);
@@ -551,6 +553,7 @@ pub fn plugInit(plug_state: *PlugState) void {
         };
         break :blk PlugState.UserSettings.init();
     };
+
     rl.setTargetFPS(plug_state.settings.fps); // Set our game to run at 60 frames-per-second
     rl.setTraceLogLevel(.warning);
     plug_state.NavigateTo(.SelectionMenu);

@@ -6,6 +6,10 @@ Drop a song in the music folder named with MusicMoment.wav and the song should s
 
 Project inspired by Mualizer
 
+# How to use
+
+Place any song in the music folder then start app, select song and enjoy
+
 # Controls
 
 ## Visualizer Mode
@@ -27,4 +31,4 @@ Project inspired by Mualizer
 
 ## Selection Menu
 
-- `r` to reload the available files
+- `r` to reload the available music files
