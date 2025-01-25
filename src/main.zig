@@ -27,12 +27,12 @@ pub fn main() anyerror!void {
     const screenHeight = 1080;
 
     //-------------------------------------------------------------------------------------
+    rl.initWindow(screenWidth, screenHeight, "Syaliser");
+
     rl.initAudioDevice();
     defer rl.closeAudioDevice();
 
-    rl.initWindow(screenWidth, screenHeight, "Syaliser");
-
-    state = try PlugState.init(&allocator, 12);
+    state = PlugState.init(&allocator, 12) catch @panic("State failed to initialize.");
     const state_ptr: *PlugState = &state;
 
     state_ptr.log("Here", .{}, false);
@@ -41,10 +41,12 @@ pub fn main() anyerror!void {
     defer plug.plugClose(state_ptr);
 
     // Main game loop
-    while (!rl.windowShouldClose()) { // Detect window close button or ESC key
-        // Hot Reloading
+    state_ptr.log("Loop start", .{}, false);
+    while (!(rl.windowShouldClose() or state_ptr.close)) { // Detect window close button or ESC key
+
         //----------------------------------------------------------------------------------
         plug.plugUpdate(state_ptr);
         //----------------------------------------------------------------------------------
+
     }
 }

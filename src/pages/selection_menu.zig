@@ -11,7 +11,7 @@ fn handleSelectionMenuInput(plug_state: *PlugState) void {
     }
 
     if (rl.isKeyPressed(.escape)) {
-        rl.closeWindow();
+        plug_state.close = true;
     }
 
     if (rl.isKeyPressed(.f8)) {
@@ -65,16 +65,17 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
         if (rg.guiButton(buttonRec, text) != 0) {
             plug_state.log_info("Song \"{s}\" Selected.", .{song.path});
 
-            const music = rl.loadMusicStream(song.path);
+            plug_state.NavigateTo(.Visualizer);
+
+            const music = rl.loadMusicStream(song.path) catch @panic("Failed to load the music file.");
 
             plug_state.music = music;
             plug_state.song = song;
-            rl.attachAudioStreamProcessor(plug_state.music.?.stream, plug.CollectAudioSamples);
+
+            rl.attachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
+            rl.playMusicStream(music);
+
             std.debug.print("Music Frames: {}", .{music.frameCount});
-
-            rl.playMusicStream(plug_state.music.?);
-
-            plug_state.NavigateTo(.Visualizer);
         } else if (rl.checkCollisionPointRec(mousePosition, buttonRec) and (plug_state.preview_song == null or song != plug_state.preview_song.?)) {
             std.log.info("Preview: {s}", .{song.filename});
 

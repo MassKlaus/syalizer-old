@@ -15,8 +15,8 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
     if (rl.isKeyPressed(.escape)) {
         plug_state.ClearFFT();
         if (plug_state.music) |music| {
-            rl.detachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
             rl.stopMusicStream(music);
+            rl.detachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
             plug_state.music = null;
         }
         plug_state.goBack();
@@ -154,7 +154,7 @@ fn CalculateLinePointPositions(plug_state: *PlugState, bottom_points: []rl.Vecto
     }
 }
 
-fn CalculateCirclePointPositions(plug_state: *PlugState, bottom_points: []rl.Vector2, top_points: []rl.Vector2, points_size: usize, point_counter: usize, x_offset: i32, y_offset: i32, height: i32, angle: f64) void {
+fn CalculateCirclePointPositions(plug_state: *PlugState, bottom_points: []rl.Vector2, top_points: []rl.Vector2, points_size: usize, point_counter: usize, x_offset: i32, y_offset: i32, height: i32, angle: f32) void {
     const base_radius: i32 = 100;
     const inner_radius = base_radius - 80;
     const radius = @as(f64, @floatFromInt(height + base_radius));
@@ -183,25 +183,22 @@ fn CalculateCirclePointPositions(plug_state: *PlugState, bottom_points: []rl.Vec
 }
 
 fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32) void {
-    const amount_of_points: u64 = 50;
-    const samples_per_point: u64 = @divFloor(amplitudes.len, amount_of_points);
+    const amount_of_points: usize = 50;
+    const samples_per_point: usize = @divFloor(amplitudes.len, amount_of_points);
     const points_size = (amount_of_points + 1) * 2;
 
     var bottom_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
     var top_points: [points_size]rl.Vector2 = [1]rl.Vector2{rl.Vector2.init(0, 0)} ** (points_size);
 
-    const line_length: f64 = @as(f64, @floatFromInt(rl.getRenderWidth())) / 2.0;
-    const line_step: f64 = line_length / @as(f64, @floatFromInt(amount_of_points));
-    const circle_angle_step = std.math.pi / @as(f64, @floatFromInt(amount_of_points));
+    const line_length: f32 = @as(f32, @floatFromInt(rl.getRenderWidth())) / 2.0;
+    const line_step: f32 = line_length / @as(f32, @floatFromInt(amount_of_points));
+    const circle_angle_step = std.math.pi / @as(f32, @floatFromInt(amount_of_points));
 
     const y_offset: i32 = @as(i32, @divFloor(rl.getRenderHeight(), 2));
     const x_offset: i32 = @intFromFloat(line_length);
-    const max_height: f64 = @as(f64, @floatFromInt(rl.getRenderHeight())) / 3.0;
+    const max_height: f32 = @as(f32, @floatFromInt(rl.getRenderHeight())) / 3.0;
 
-    var index: u64 = 0;
-
-    var previousPosX: i32 = 0;
-    var previousPosY: i32 = 0;
+    var index: usize = 0;
 
     var point_counter: usize = 0;
 
@@ -237,7 +234,7 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.Ren
                     CalculateLinePointPositions(plug_state, &bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, posX, posY);
                 },
                 .circle => {
-                    const angle = circle_angle_step * @as(f64, @floatFromInt(point_counter));
+                    const angle = circle_angle_step * @as(f32, @floatFromInt(point_counter));
                     CalculateCirclePointPositions(plug_state, &bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, height, angle);
                 },
                 .bars => {
@@ -247,9 +244,6 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.Ren
                     rl.drawRectangle(x_offset + posX, y_offset, @intFromFloat(line_step), height, plug_state.settings.front_color);
                 },
             }
-
-            if (plug_state.renderMode == .lines) {} else previousPosX = posX;
-            previousPosY = posY;
         }
 
         if (plug_state.renderMode == .lines or plug_state.renderMode == .circle) {
@@ -271,7 +265,7 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
     plug_state.ClearFFT();
     defer plug_state.ClearFFT();
 
-    const audio = rl.loadWave(plug_state.song.?.path);
+    const audio = rl.loadWave(plug_state.song.?.path) catch @panic("Failed to load wave");
     defer rl.unloadWave(audio);
 
     plug_state.outputMode = .video;
@@ -309,7 +303,7 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
         RenderVisualizerFrameToTexture(plug_state, plug_state.render_texture, amp_data.amps, amp_data.max);
         plug.ApplyShadersToTexture(plug_state, plug_state.render_texture, plug_state.shader_texture);
 
-        const image = rl.loadImageFromTexture(plug_state.shader_texture.texture);
+        const image = rl.loadImageFromTexture(plug_state.shader_texture.texture) catch continue;
         defer rl.unloadImage(image);
 
         plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerData);

@@ -139,6 +139,7 @@ pub const PlugState = struct {
     toggle_lines: bool = false,
     render_info: bool = true,
     pause: bool = false,
+    close: bool = false,
     view_UI: bool = true,
 
     log_file: std.fs.File,
@@ -173,8 +174,8 @@ pub const PlugState = struct {
             .smooth_amplitudes = core.smooth_amplitudes[0..samplesize],
             .shaders = std.ArrayList(ShaderInfo).init(allocator.*),
             .songs = std.ArrayList(SongInfo).init(allocator.*),
-            .render_texture = rl.loadRenderTexture(1920, 1080),
-            .shader_texture = rl.loadRenderTexture(1920, 1080),
+            .render_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
+            .shader_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the shader Texture"),
             .pages = std.ArrayList(Pages).init(allocator.*),
             .settings = UserSettings.init(),
             .log_file = file,
@@ -223,7 +224,9 @@ pub const PlugState = struct {
                 defer self.allocator.free(valid_path);
 
                 const name = try AdaptStringAlloc(self.allocator, entry.basename);
-                try self.shaders.append(.{ .filename = name, .shader = rl.loadShader(null, valid_path) });
+                try self.shaders.append(.{ .filename = name, .shader = rl.loadShader(null, valid_path) catch {
+                    continue;
+                } });
                 continue;
             }
 
@@ -443,7 +446,7 @@ inline fn complexAmpToNormalAmp(complex_amplitude: Complex(f32)) f32 {
 pub fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) void {
     const frame_buffer: ?[*]const f32 = @ptrCast(@alignCast(buffer.?));
 
-    if (frame_buffer == null) {
+    if (frame_buffer == null or global_plug_state.music == null) {
         std.log.info("Incorrect Data", .{});
         return;
     }
@@ -555,7 +558,7 @@ pub fn plugInit(plug_state: *PlugState) void {
     };
 
     rl.setTargetFPS(plug_state.settings.fps); // Set our game to run at 60 frames-per-second
-    rl.setTraceLogLevel(.warning);
+    // rl.setTraceLogLevel(.warning);
     plug_state.NavigateTo(.SelectionMenu);
 
     SetupGuiStyle(plug_state);
@@ -575,20 +578,20 @@ pub fn plugInit(plug_state: *PlugState) void {
 }
 
 fn SetupGuiStyle(plug_state: *PlugState) void {
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.base_color_normal), plug_state.settings.back_color.toInt());
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.border_color_normal), plug_state.settings.front_color.toInt());
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.text_color_normal), plug_state.settings.front_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.base_color_normal, plug_state.settings.back_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.border_color_normal, plug_state.settings.front_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.text_color_normal, plug_state.settings.front_color.toInt());
 
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.base_color_pressed), plug_state.settings.back_color.toInt());
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.border_color_pressed), plug_state.settings.pressed_color.toInt());
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.text_color_pressed), plug_state.settings.pressed_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.base_color_pressed, plug_state.settings.back_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.border_color_pressed, plug_state.settings.pressed_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.text_color_pressed, plug_state.settings.pressed_color.toInt());
 
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.base_color_focused), plug_state.settings.back_color.toInt());
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.border_color_focused), plug_state.settings.focused_color.toInt());
-    rg.guiSetStyle(.default, @intFromEnum(rg.GuiControlProperty.text_color_focused), plug_state.settings.focused_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.base_color_focused, plug_state.settings.back_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.border_color_focused, plug_state.settings.focused_color.toInt());
+    rg.guiSetStyle(.default, rg.GuiControlProperty.text_color_focused, plug_state.settings.focused_color.toInt());
 
-    rg.guiSetStyle(.listview, @intFromEnum(rg.GuiControlProperty.border_color_focused), plug_state.settings.front_color.toInt());
-    rg.guiSetStyle(.listview, @intFromEnum(rg.GuiControlProperty.border_color_pressed), plug_state.settings.front_color.toInt());
+    rg.guiSetStyle(.listview, rg.GuiControlProperty.border_color_focused, plug_state.settings.front_color.toInt());
+    rg.guiSetStyle(.listview, rg.GuiControlProperty.border_color_pressed, plug_state.settings.front_color.toInt());
 }
 
 pub fn AdaptString(text: []const u8) [:0]const u8 {
@@ -645,18 +648,13 @@ pub fn getAmplitudesToRender(plug_state: *PlugState, delta_time: f32) struct { a
 }
 
 pub fn plugUpdate(plug_state: *PlugState) void {
-    if (plug_state.music) |music| {
-        // Music Polling
-        //----------------------------------------------------------------------------------
-        rl.updateMusicStream(music);
-        //----------------------------------------------------------------------------------
-    }
     switch (plug_state.page) {
         .SelectionMenu => {
             menu.RenderSelectionMenuPage(plug_state);
         },
         .Visualizer => {
-            if (plug_state.music != null) {
+            if (plug_state.music) |music| {
+                rl.updateMusicStream(music);
                 visualizer.RenderVisualizerPage(plug_state);
             }
         },
