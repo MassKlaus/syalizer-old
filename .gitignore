@@ -6,3 +6,4 @@ music/*
 *.jpg
 .config
 *output*
+screenshot*.png

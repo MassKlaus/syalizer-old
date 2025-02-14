@@ -17,7 +17,7 @@ pub fn main() anyerror!void {
 
     defer {
         if (gpa.deinit() == .leak) {
-            std.log.debug("Memory is leaking.", .{});
+            std.log.info("Memory is leaking.", .{});
         }
     }
 

@@ -1,5 +1,7 @@
 const std = @import("std");
 const plug = @import("../plug.zig");
+const settings = @import("./settings.zig");
+const utils = @import("../utils.zig");
 const PlugState = plug.PlugState;
 const rl = @import("raylib");
 const rg = @import("raygui");
@@ -17,6 +19,7 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
         if (plug_state.music) |music| {
             rl.stopMusicStream(music);
             rl.detachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
+            rl.unloadMusicStream(music);
             plug_state.music = null;
         }
         plug_state.goBack();
@@ -25,28 +28,6 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
     if (rl.isKeyPressed(.m)) {
         plug_state.music_volume = if (plug_state.music_volume != 0) 0 else rl.getMasterVolume();
         rl.setMusicVolume(plug_state.music.?, plug_state.music_volume);
-    }
-
-    if (rl.isKeyPressed(.s)) {
-        plug_state.shader_index = 0;
-        plug_state.shader = if (plug_state.shader == null and plug_state.shader_index < plug_state.shaders.items.len)
-            &plug_state.shaders.items[plug_state.shader_index]
-        else
-            null;
-
-        plug_state.log_info("Toggling Shader state: {}", .{plug_state.shader == null});
-    }
-
-    if (plug_state.shader != null) {
-        if (rl.isKeyPressed(.left)) {
-            plug_state.shader_index = if (plug_state.shader_index == 0) plug_state.shaders.items.len - 1 else plug_state.shader_index - 1;
-            plug_state.log_info("Loaded shader: \"{s}\"", .{plug_state.shaders.items[plug_state.shader_index].filename});
-        } else if (rl.isKeyPressed(.right)) {
-            plug_state.shader_index = (plug_state.shader_index + 1) % plug_state.shaders.items.len;
-            plug_state.log_info("Loaded shader: \"{s}\"", .{plug_state.shaders.items[plug_state.shader_index].filename});
-        }
-
-        plug_state.shader = &plug_state.shaders.items[plug_state.shader_index];
     }
 
     if (rl.isKeyDown(.down)) {
@@ -114,7 +95,96 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
     }
 
     if (rl.isKeyPressed(.f8)) {
-        plug_state.NavigateTo(.Settings);
+        plug_state.setting_UI = !plug_state.setting_UI;
+    }
+}
+
+var appliedScrollOffset = rl.Vector2.init(0, 0);
+var shaderScrollOffset = rl.Vector2.init(0, 0);
+var renderContent = rl.Rectangle.init(0, 0, 0, 0);
+
+pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
+    if (plug_state.setting_UI) {
+        const offset_x: i32 = @intFromFloat(size.x);
+        const offset_y: i32 = @intFromFloat(size.y);
+        const width: i32 = @intFromFloat(size.width);
+        const height: i32 = @intFromFloat(size.height);
+
+        rl.drawRectangle(offset_x - 1, offset_y - 1, width + 2, height + 2, plug_state.settings.border_color);
+        rl.drawRectangle(offset_x, offset_y, width, height, plug_state.settings.back_color);
+
+        rl.drawText("Applied Shader List", offset_x + 10, offset_y + 20, 16, plug_state.settings.front_color);
+        _ = rg.guiToggle(utils.init(offset_x + width - 100, offset_y + 10, 90, 50), "Enable", &plug_state.apply_shader_stack);
+
+        const button_height: i32 = 200;
+
+        const column_width: i32 = @divFloor(width, 2);
+        const column_heigth: i32 = height - 60 - 24;
+        const scroll_area_heigth: i32 = height - 60 + 2;
+
+        const scroll_area_y: i32 = @intFromFloat(size.y + 60);
+        const scissor_y: i32 = scroll_area_y + 24;
+        const mouse_position = rl.getMousePosition();
+
+        {
+            const scroll_x: i32 = @intFromFloat(appliedScrollOffset.x);
+            const scroll_y: i32 = @intFromFloat(appliedScrollOffset.y);
+            const stack_height: i32 = @intCast(button_height * plug_state.applied_shaders.items.len);
+            const stack_column_width = if (stack_height < column_heigth) column_width else column_width - 13;
+            const scissor_stack_x: i32 = offset_x;
+            const stack_x: i32 = scissor_stack_x + scroll_x;
+            const stack_y: i32 = scissor_y + scroll_y;
+
+            const position = utils.init(scissor_stack_x, scroll_area_y, column_width, scroll_area_heigth);
+            _ = rg.guiScrollPanel(position, "Effect Stack", utils.init(0, 0, column_width, stack_height), &appliedScrollOffset, &renderContent);
+
+            rl.beginScissorMode(scissor_stack_x, scissor_y, stack_column_width, column_heigth);
+            defer rl.endScissorMode();
+
+            rl.drawRectangle(scissor_stack_x, scissor_y, stack_column_width, column_heigth, plug_state.settings.back_color);
+
+            var i: usize = 0;
+            while (i < plug_state.applied_shaders.items.len) : (i += 1) {
+                const shader = plug_state.applied_shaders.items[i];
+                const index = @as(i32, @intCast(i));
+                const position_y: i32 = stack_y + button_height * index;
+                const text = plug.AdaptString(shader.filename);
+
+                const button_rectangle = rl.Rectangle.init(@floatFromInt(stack_x), @floatFromInt(position_y), @floatFromInt(stack_column_width), button_height);
+
+                if (rg.guiButton(button_rectangle, text) != 0 and rl.checkCollisionPointRec(mouse_position, position)) {
+                    _ = plug_state.applied_shaders.orderedRemove(i);
+                }
+            }
+        }
+
+        {
+            const scroll_x: i32 = @intFromFloat(shaderScrollOffset.x);
+            const scroll_y: i32 = @intFromFloat(shaderScrollOffset.y);
+            const shaders_height: i32 = @intCast(button_height * plug_state.shaders.len);
+            const shaders_column_width = if (shaders_height < column_heigth) column_width else column_width - 13;
+            const scissor_shader_x: i32 = offset_x + column_width;
+            const shader_x: i32 = scissor_shader_x + scroll_x;
+            const shader_y: i32 = scissor_y + scroll_y;
+            const position = utils.init(scissor_shader_x, scroll_area_y, column_width, scroll_area_heigth);
+            _ = rg.guiScrollPanel(position, "Available Effects", utils.init(0, 0, column_width, shaders_height), &shaderScrollOffset, &renderContent);
+
+            rl.beginScissorMode(scissor_shader_x, scissor_y, shaders_column_width, column_heigth);
+            defer rl.endScissorMode();
+
+            rl.drawRectangle(scissor_shader_x, scissor_y, shaders_column_width, column_heigth, plug_state.settings.back_color);
+
+            for (plug_state.shaders, 0..) |*shader, i| {
+                const index = @as(i32, @intCast(i));
+                const position_y: i32 = shader_y + button_height * index;
+                const text = plug.AdaptString(shader.filename);
+                const button_rectangle = rl.Rectangle.init(@floatFromInt(shader_x), @floatFromInt(position_y), @floatFromInt(shaders_column_width), button_height);
+
+                if (rg.guiButton(button_rectangle, text) != 0 and rl.checkCollisionPointRec(mouse_position, position)) {
+                    plug_state.applied_shaders.append(shader) catch @panic("Bullshit");
+                }
+            }
+        }
     }
 }
 
@@ -126,7 +196,7 @@ pub fn RenderVisualizerPage(plug_state: *PlugState) void {
 
             RenderVisualizerFrameToTexture(plug_state, plug_state.render_texture, amp_data.amps, amp_data.max);
             plug.ApplyShadersToTexture(plug_state, plug_state.render_texture, plug_state.shader_texture);
-            plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerData);
+            plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerInfo);
         },
         .video => {
             RenderVisualizeVideoWithFFMPEG(plug_state);
@@ -306,7 +376,7 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
         const image = rl.loadImageFromTexture(plug_state.shader_texture.texture) catch continue;
         defer rl.unloadImage(image);
 
-        plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerData);
+        plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerInfo);
 
         const pixels_raw: [*]const u8 = @ptrCast(@alignCast(image.data));
 
@@ -343,9 +413,7 @@ fn RenderVisualizerInfo(plug_state: *PlugState) void {
 
 fn RenderVisualizerData(plug_state: *PlugState) void {
     if (plug_state.render_info) {
-        const name = if (plug_state.shader) |shader| shader.filename else "None";
-
-        const output = std.fmt.bufPrint(&plug.text_buffer, "Shader: {s}", .{name}) catch @panic("BAD");
+        const output = std.fmt.bufPrint(&plug.text_buffer, "Shaders: {}", .{plug_state.apply_shader_stack}) catch @panic("BAD");
         const text = plug.AdaptString(output);
 
         rl.drawText(text, 10, 30, 16, plug_state.settings.front_color);
@@ -381,9 +449,11 @@ fn RenderVisualizerData(plug_state: *PlugState) void {
 }
 
 fn RenderVisualizerUI(plug_state: *PlugState) void {
-    if (!plug_state.view_UI) return;
+    const width: f32 = 1400;
+    const height: f32 = 800;
+    const start_x = (1920 - width) / 2;
+    const start_y = (1080 - height) / 2;
 
-    if (plug_state.shader) |_| {
-        _ = rg.guiButton(rl.Rectangle.init(1720, 50, 50, 50), "Something");
-    }
+    const size = rl.Rectangle.init(start_x, start_y, width, height);
+    RenderSettingDialog(plug_state, size);
 }

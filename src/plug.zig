@@ -1,8 +1,8 @@
 const std = @import("std");
-const testing = std.testing;
-const Complex = std.math.Complex;
 const rl = @import("raylib");
 const rg = @import("raygui");
+const testing = std.testing;
+const Complex = std.math.Complex;
 const root = @import("root.zig");
 const visualizer = @import("pages/visualizer.zig");
 const menu = @import("pages/selection_menu.zig");
@@ -85,7 +85,7 @@ pub const PlugState = struct {
     };
 
     // hardcoded arrays
-    core: PlugCore,
+    core: *PlugCore,
 
     allocator: *std.mem.Allocator,
 
@@ -111,16 +111,14 @@ pub const PlugState = struct {
     // Music Currently Handling
     music: ?rl.Music = null,
     music_volume: f32 = 50,
-    songs: std.ArrayList(SongInfo),
+    songs: []SongInfo,
     song: ?*SongInfo = null,
     preview_song: ?*SongInfo = null,
     preview_audio: ?rl.Wave = null,
     preview_audio_data: []f32 = undefined,
 
     // Collection Of Shaders
-    shaders: std.ArrayList(ShaderInfo),
-    shader: ?*ShaderInfo = null,
-    shader_index: usize = 0,
+    shaders: []ShaderInfo,
 
     render_texture: rl.RenderTexture2D = undefined,
     shader_texture: rl.RenderTexture2D = undefined,
@@ -141,6 +139,7 @@ pub const PlugState = struct {
     pause: bool = false,
     close: bool = false,
     view_UI: bool = true,
+    setting_UI: bool = false,
 
     log_file: std.fs.File,
     log_writer: std.fs.File.Writer,
@@ -149,17 +148,22 @@ pub const PlugState = struct {
     pages: std.ArrayList(Pages),
     settings: UserSettings,
 
+    // Shader Stack: Allows applying multiple shaders in series by order
+    apply_shader_stack: bool = false,
+    applied_shaders: std.ArrayList(*ShaderInfo),
+
     pub fn init(allocator: *std.mem.Allocator, sample_level: usize) PlugError!PlugState {
         if (sample_level > max_level) {
             return PlugError.TooLarge;
         }
 
-        var core: PlugCore = .{};
+        // This avoid the issue of stack moving of the value keeping us safe from any un-intended creations
+        var core = allocator.create(PlugCore) catch @panic("Memory is not enough to create core");
         const samplesize = std.math.pow(u64, 2, sample_level);
 
         const file = std.fs.cwd().createFile("./output.log", .{ .truncate = true }) catch @panic("Cannot create file");
 
-        return .{
+        const emu: PlugState = .{
             .allocator = allocator,
             .core = core,
             .samplesize = samplesize,
@@ -172,23 +176,29 @@ pub const PlugState = struct {
             .log_amplitudes = core.log_amplitudes[0..samplesize],
             .smear_amplitudes = core.smear_amplitudes[0..samplesize],
             .smooth_amplitudes = core.smooth_amplitudes[0..samplesize],
-            .shaders = std.ArrayList(ShaderInfo).init(allocator.*),
-            .songs = std.ArrayList(SongInfo).init(allocator.*),
+            .shaders = undefined,
+            .songs = undefined,
             .render_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
             .shader_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the shader Texture"),
             .pages = std.ArrayList(Pages).init(allocator.*),
             .settings = UserSettings.init(),
             .log_file = file,
             .log_writer = file.writer(),
+            .applied_shaders = std.ArrayList(*ShaderInfo).init(allocator.*),
         };
+
+        return emu;
     }
 
     pub fn deinit(self: *PlugState) void {
         self.UnloadShaders();
         self.UnloadSongList();
-        self.shaders.deinit();
-        self.songs.deinit();
+        rl.unloadTexture(self.render_texture.texture);
+        rl.unloadTexture(self.shader_texture.texture);
+
+        self.applied_shaders.clearAndFree();
         self.pages.deinit();
+        self.allocator.destroy(self.core);
     }
 
     pub fn LoadShaders(self: *PlugState) !void {
@@ -209,11 +219,13 @@ pub const PlugState = struct {
         self.log("Shaders Folder Opened", .{}, false);
 
         var walker = shaders_dir.walk(self.allocator.*) catch |err| {
-            self.log_error("Failed to initalize walker.", .{});
+            self.log_error("Failed to initalize shader walker.", .{});
             return err;
         };
         defer walker.deinit();
         self.log("Shaders Walker Created", .{}, false);
+
+        var shadersList = std.ArrayList(ShaderInfo).init(self.allocator.*);
 
         while (walker.next()) |Optionalentry| {
             if (Optionalentry) |entry| {
@@ -224,28 +236,29 @@ pub const PlugState = struct {
                 defer self.allocator.free(valid_path);
 
                 const name = try AdaptStringAlloc(self.allocator, entry.basename);
-                try self.shaders.append(.{ .filename = name, .shader = rl.loadShader(null, valid_path) catch {
-                    continue;
-                } });
-                continue;
-            }
+                const shader: ShaderInfo = .{
+                    .filename = name,
+                    .shader = rl.loadShader(null, valid_path) catch continue,
+                };
 
-            break;
+                try shadersList.append(shader);
+            } else break;
         } else |err| {
             self.log_error("Walker Errored. {}", .{err});
             return err;
         }
 
-        self.log_info("{} Shaders Loaded", .{self.shaders.items.len});
+        self.shaders = try shadersList.toOwnedSlice();
+        self.log_info("{} Shaders Loaded", .{self.shaders.len});
     }
 
     pub fn UnloadShaders(self: *PlugState) void {
-        for (self.shaders.items) |shaderInfo| {
+        for (self.shaders) |shaderInfo| {
             rl.unloadShader(shaderInfo.shader);
             self.allocator.free(shaderInfo.filename);
         }
 
-        self.shaders.clearRetainingCapacity();
+        self.allocator.free(self.shaders);
     }
 
     pub fn LoadSongList(self: *PlugState) !void {
@@ -265,12 +278,14 @@ pub const PlugState = struct {
         self.log("Music Folder Opened", .{}, false);
 
         var walker = songs_dir.walk(self.allocator.*) catch |err| {
-            self.log_error("Failed to initalize walker.", .{});
+            self.log_error("Failed to initalize song walker.", .{});
             return err;
         };
         defer walker.deinit();
 
         self.log("Music Walker Created", .{}, false);
+
+        var songList = std.ArrayList(SongInfo).init(self.allocator.*);
 
         while (walker.next()) |Optionalentry| {
             if (Optionalentry) |entry| {
@@ -279,7 +294,7 @@ pub const PlugState = struct {
                 const valid_path = try AdaptStringAlloc(self.allocator, path);
                 const name = try AdaptStringAlloc(self.allocator, entry.basename);
 
-                try self.songs.append(.{ .filename = name, .path = valid_path });
+                try songList.append(.{ .filename = name, .path = valid_path });
                 continue;
             }
 
@@ -289,16 +304,17 @@ pub const PlugState = struct {
             return err;
         }
 
-        self.log_info("{} Songs Loaded", .{self.songs.items.len});
+        self.songs = try songList.toOwnedSlice();
+        self.log_info("{} Songs Loaded", .{self.songs.len});
     }
 
     pub fn UnloadSongList(self: *PlugState) void {
-        for (self.songs.items) |songInfo| {
+        for (self.songs) |songInfo| {
             self.allocator.free(songInfo.filename);
             self.allocator.free(songInfo.path);
         }
 
-        self.songs.clearRetainingCapacity();
+        self.allocator.free(self.songs);
     }
 
     pub fn ClearFFT(plug_state: *PlugState) void {
@@ -670,21 +686,34 @@ pub fn PrintTextureToScreen(plug_state: *PlugState, texture: rl.RenderTexture, i
 
     rl.drawTextureRec(texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
 
-    if (infoRender) |renderIndo| {
-        renderIndo(plug_state);
+    if (infoRender) |extraRender| {
+        extraRender(plug_state);
     }
 }
 
 pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTexture2D, output_texture: rl.RenderTexture2D) void {
-    rl.beginTextureMode(output_texture);
-    defer rl.endTextureMode();
+    var ping = input_texture;
+    var pong = output_texture;
 
-    if (plug_state.shader) |shader| {
-        rl.beginShaderMode(shader.shader);
-        defer rl.endShaderMode();
-        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+    if (plug_state.apply_shader_stack and plug_state.applied_shaders.items.len > 0) {
+        for (plug_state.applied_shaders.items) |shader| {
+            rl.beginTextureMode(pong);
+            defer rl.endTextureMode();
+
+            rl.beginShaderMode(shader.shader);
+            defer rl.endShaderMode();
+
+            rl.drawTextureRec(ping.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+
+            // Swap input and output for next shader
+            const temp = ping;
+            ping = pong;
+            pong = temp;
+        }
     } else {
-        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+        rl.beginTextureMode(pong);
+        defer rl.endTextureMode();
+        rl.drawTextureRec(ping.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
     }
 }
 
