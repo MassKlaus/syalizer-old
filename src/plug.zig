@@ -122,6 +122,8 @@ pub const PlugState = struct {
 
     render_texture: rl.RenderTexture2D = undefined,
     shader_texture: rl.RenderTexture2D = undefined,
+    ping_texture: rl.RenderTexture2D = undefined,
+    pong_texture: rl.RenderTexture2D = undefined,
 
     // Enum State
     page: Pages = .SelectionMenu,
@@ -180,6 +182,8 @@ pub const PlugState = struct {
             .songs = undefined,
             .render_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
             .shader_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the shader Texture"),
+            .ping_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the ping Texture"),
+            .pong_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the shader Texture"),
             .pages = std.ArrayList(Pages).init(allocator.*),
             .settings = UserSettings.init(),
             .log_file = file,
@@ -692,29 +696,52 @@ pub fn PrintTextureToScreen(plug_state: *PlugState, texture: rl.RenderTexture, i
 }
 
 pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTexture2D, output_texture: rl.RenderTexture2D) void {
-    var ping = input_texture;
-    var pong = output_texture;
-
-    if (plug_state.apply_shader_stack and plug_state.applied_shaders.items.len > 0) {
-        for (plug_state.applied_shaders.items) |shader| {
-            rl.beginTextureMode(pong);
-            defer rl.endTextureMode();
-
-            rl.beginShaderMode(shader.shader);
-            defer rl.endShaderMode();
-
-            rl.drawTextureRec(ping.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
-
-            // Swap input and output for next shader
-            const temp = ping;
-            ping = pong;
-            pong = temp;
-        }
-    } else {
-        rl.beginTextureMode(pong);
+    if (!plug_state.apply_shader_stack or plug_state.applied_shaders.items.len == 0) {
+        // No shaders, copy input directly to output
+        rl.beginTextureMode(output_texture);
         defer rl.endTextureMode();
-        rl.drawTextureRec(ping.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+        return;
     }
+
+    {
+        rl.beginTextureMode(plug_state.ping_texture);
+        defer rl.endTextureMode();
+
+        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+    }
+
+    var ping = plug_state.ping_texture;
+    var pong = plug_state.pong_texture;
+
+    for (plug_state.applied_shaders.items) |shader| {
+        ApplyShaderToTexture(shader, ping, pong);
+
+        const temp = ping;
+        ping = pong;
+        pong = temp;
+    }
+
+    {
+        rl.beginTextureMode(output_texture);
+        defer rl.endTextureMode();
+
+        if (@mod(plug_state.applied_shaders.items.len, 2) == 0) {
+            rl.drawTextureRec(plug_state.ping_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+        } else {
+            rl.drawTextureRec(plug_state.pong_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+        }
+    }
+}
+
+fn ApplyShaderToTexture(shader: *PlugState.ShaderInfo, input_texture: rl.RenderTexture2D, output_texture: rl.RenderTexture2D) void {
+    rl.beginTextureMode(output_texture);
+    defer rl.endTextureMode();
+
+    rl.beginShaderMode(shader.shader);
+    defer rl.endShaderMode();
+
+    rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
 }
 
 pub fn PrintToImage(input_texture: rl.RenderTexture, output_texture: rl.RenderTexture) rl.Image {
