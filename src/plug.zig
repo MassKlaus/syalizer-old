@@ -704,15 +704,8 @@ pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTex
         return;
     }
 
-    {
-        rl.beginTextureMode(plug_state.ping_texture);
-        defer rl.endTextureMode();
-
-        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
-    }
-
-    var ping = plug_state.ping_texture;
-    var pong = plug_state.pong_texture;
+    var ping = input_texture;
+    var pong = output_texture;
 
     for (plug_state.applied_shaders.items) |shader| {
         ApplyShaderToTexture(shader, ping, pong);
@@ -727,9 +720,7 @@ pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTex
         defer rl.endTextureMode();
 
         if (@mod(plug_state.applied_shaders.items.len, 2) == 0) {
-            rl.drawTextureRec(plug_state.ping_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
-        } else {
-            rl.drawTextureRec(plug_state.pong_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+            rl.drawTextureRec(ping.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
         }
     }
 }
