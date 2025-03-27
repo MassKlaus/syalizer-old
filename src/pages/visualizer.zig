@@ -325,7 +325,7 @@ var fpsBuffer: [100]u8 = [1]u8{0} ** 100;
 
 fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
     const fpsToText = std.fmt.bufPrintIntToSlice(&fpsBuffer, plug_state.settings.fps, 10, .lower, .{});
-    const argv = [_][]const u8{ "ffmpeg", "-loglevel", "verbose", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", fpsToText, "-i", "-", "-i", plug_state.song.?.path, "-c:v", "libx264", "-b:v", "25000k", "-c:a", "aac", "-b:a", "200k", "output.mp4" };
+    const argv = [_][]const u8{ "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", fpsToText, "-i", "-", "-i", plug_state.song.?.path, "-c:v", "libx264", "-b:v", "25000k", "-c:a", "aac", "-b:a", "200k", "output.mp4" };
     var proc = std.process.Child.init(&argv, plug_state.allocator.*);
     proc.stdin_behavior = .Pipe;
     proc.spawn() catch @panic("Failed ffmpeg launch");

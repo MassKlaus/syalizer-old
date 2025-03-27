@@ -578,6 +578,7 @@ pub fn plugInit(plug_state: *PlugState) void {
         break :blk PlugState.UserSettings.init();
     };
 
+    rl.setTraceLogLevel(.warning);
     rl.setTargetFPS(plug_state.settings.fps); // Set our game to run at 60 frames-per-second
     // rl.setTraceLogLevel(.warning);
     plug_state.NavigateTo(.SelectionMenu);
