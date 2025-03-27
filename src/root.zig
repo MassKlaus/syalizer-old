@@ -76,14 +76,17 @@ pub const FT = struct {
     pub fn NoAllocDFT(amplitudes: []Complex(f32), input: []Complex(f32)) void {
         const size_float = @as(f32, @floatFromInt(amplitudes.len));
 
+        // k is the frency we are studying
         for (0..input.len) |k| {
             const k_float: f32 = @floatFromInt(k);
             amplitudes[k] = Complex(f32).init(0, 0);
 
+            // t is the temporal offset in the list of inputs
             for (0..input.len) |t| {
                 const t_float: f32 = @floatFromInt(t);
                 const angle = std.math.complex.exp(Complex(f32).init(0, -2 * std.math.pi * k_float * t_float / size_float));
 
+                // multiply the input with the offset sin wave to see if it is within range of the wanted frequency
                 amplitudes[k] = amplitudes[k].add(input[t].mul(angle));
             }
         }

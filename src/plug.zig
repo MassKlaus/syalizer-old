@@ -15,6 +15,7 @@ const max_samplesize = std.math.pow(u64, 2, max_level);
 pub var text_buffer: [1024]u8 = [1]u8{0} ** 1024;
 pub var zero_terminated_buffer: [1024]u8 = [1]u8{0} ** 1024;
 
+// TODO: Check data re-ordering
 pub const PlugState = struct {
     const PlugError = error{TooLarge};
 
