@@ -35,8 +35,6 @@ pub fn main() anyerror!void {
     state = PlugState.init(&allocator, 12) catch @panic("State failed to initialize.");
     const state_ptr: *PlugState = &state;
 
-    state_ptr.log("Here", .{}, false);
-
     plug.plugInit(state_ptr);
     defer plug.plugClose(state_ptr);
 
