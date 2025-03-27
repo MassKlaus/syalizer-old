@@ -308,10 +308,8 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.Ren
                     CalculateCirclePointPositions(plug_state, &bottom_points, &top_points, points_size, point_counter, x_offset, y_offset, height, angle);
                 },
                 .bars => {
-                    rl.drawRectangle(x_offset - posX, y_offset - posY, @intFromFloat(line_step), height, plug_state.settings.front_color);
-                    rl.drawRectangle(x_offset + posX, y_offset - posY, @intFromFloat(line_step), height, plug_state.settings.front_color);
-                    rl.drawRectangle(x_offset - posX, y_offset, @intFromFloat(line_step), height, plug_state.settings.front_color);
-                    rl.drawRectangle(x_offset + posX, y_offset, @intFromFloat(line_step), height, plug_state.settings.front_color);
+                    rl.drawRectangle(x_offset - posX, y_offset - posY, @intFromFloat(line_step), height * 2, plug_state.settings.front_color);
+                    rl.drawRectangle(x_offset + posX, y_offset - posY, @intFromFloat(line_step), height * 2, plug_state.settings.front_color);
                 },
             }
         }
