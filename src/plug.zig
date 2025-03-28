@@ -142,7 +142,7 @@ pub const PlugState = struct {
     pause: bool = false,
     close: bool = false,
     view_UI: bool = true,
-    setting_UI: bool = false,
+    display_shader_UI: bool = false,
 
     log_file: std.fs.File,
     log_writer: std.fs.File.Writer,

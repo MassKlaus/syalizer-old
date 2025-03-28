@@ -95,7 +95,7 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
     }
 
     if (rl.isKeyPressed(.f8)) {
-        plug_state.setting_UI = !plug_state.setting_UI;
+        plug_state.display_shader_UI = !plug_state.display_shader_UI;
     }
 }
 
@@ -104,7 +104,7 @@ var shaderScrollOffset = rl.Vector2.init(0, 0);
 var renderContent = rl.Rectangle.init(0, 0, 0, 0);
 
 pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
-    if (plug_state.setting_UI) {
+    if (plug_state.display_shader_UI) {
         const offset_x: i32 = @intFromFloat(size.x);
         const offset_y: i32 = @intFromFloat(size.y);
         const width: i32 = @intFromFloat(size.width);
@@ -325,7 +325,7 @@ var fpsBuffer: [100]u8 = [1]u8{0} ** 100;
 
 fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
     const fpsToText = std.fmt.bufPrintIntToSlice(&fpsBuffer, plug_state.settings.fps, 10, .lower, .{});
-    const argv = [_][]const u8{ "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", fpsToText, "-i", "-", "-i", plug_state.song.?.path, "-c:v", "libx264", "-b:v", "25000k", "-c:a", "aac", "-b:a", "200k", "output.mp4" };
+    const argv = [_][]const u8{ "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", fpsToText, "-i", "-", "-i", plug_state.song.?.path, "-vf", "vflip", "-c:v", "libx264", "-b:v", "25000k", "-c:a", "aac", "-b:a", "200k", "output.mp4" };
     var proc = std.process.Child.init(&argv, plug_state.allocator.*);
     proc.stdin_behavior = .Pipe;
     proc.spawn() catch @panic("Failed ffmpeg launch");
@@ -379,6 +379,7 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
         const pixels_raw: [*]const u8 = @ptrCast(@alignCast(image.data));
 
         const pixels: []const u8 = pixels_raw[0 .. 1920 * 1080 * 4];
+
         _ = proc.stdin.?.write(pixels) catch @panic("Bad Pipe!");
 
         const sampled_frames = sample_buffer[processed_frames * audio.channels .. (processed_frames + frame_step) * audio.channels];

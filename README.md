@@ -12,23 +12,56 @@ Place any song in the music folder then start app, select song and enjoy
 
 # Controls
 
-## Visualizer Mode
+## Visualizer Controls
 
-- `s` to enable shaders
-- `page up` to swap processing modes
-- `page down` to swap processing modes in the opposite way
-- `enter` to swap rendering modes
-- `arrow left` to swap shaders
-- `arrow right` to swap shaders in the other direction
-- `p` to start generating a video, ONLY IF FFMPEG IS IN PATH
-- `c` to cancel video
-- `r` to reload shaders
-- `u` to toggle the UI
-- `t` to toggle Text
-- `l` to toggle additional lines Text
-- `space` to pause and resume
-- `esc` to return to selection menu
+This document outlines the controls for the visualizer application, as defined in the `handleVisualizerInput` function.
 
-## Selection Menu
+**Output Mode Switching:**
 
-- `r` to reload the available music files
+* **C:** When generating video, press 'C' to cancel.
+
+**General Application Controls:**
+
+* **Escape:** Stop the current song and go back to selection menu.
+
+**Music Controls:**
+
+* **M:** Mute/Unmute song.
+
+* **Space:** Pause or resume the currently playing song.
+
+**Visualizer Adjustments:**
+
+* **Down Arrow:** Decrease the amplification factor by 0.01.
+
+* **Up Arrow:** Increase the amplification factor by 0.01.
+
+* **Enter:** Cycle through render modes: lines, circle, and bars.
+
+* **R:** Reload all shaders and fetch new oness / remove deleted ones.
+
+* **L:** Toggle line rendering.
+
+* **T:** Toggle rendering of information (e.g., debug data).
+
+* **P:** Start Rendering Video.
+
+**FFT Processing Mode:**
+
+* **Page Down:** Cycle through processing modes in the following order: normal -> smooth -> smear -> log.
+
+* **Page Up:** Cycle through processing modes in the following order: normal -> log -> smear -> smooth.
+
+**User Interface Controls:**
+
+* **U:** Toggle the main user interface.
+
+* **F8:** Toggle the shadersUI interface.
+
+## Selection Menu Controls
+
+This document outlines the controls for the selection menu, as defined in the `handleSelectionMenuInput` function.
+
+* **R:** Reload the song list.
+* **Escape:** Close the application.
+* **F8:** Navigate to the settings menu.
