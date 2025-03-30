@@ -8,7 +8,11 @@ Project inspired by Mualizer
 
 # How to use
 
-Place any song in the music folder then start app, select song and enjoy
+Place any song in the music folder then start app, select song and enjoy.
+
+Here is a [preview](https://www.youtube.com/watch?v=DanNElyrI_8):
+
+[![Video Preview of the app](https://img.youtube.com/vi/DanNElyrI_8/0.jpg)](https://www.youtube.com/watch?v=DanNElyrI_8)
 
 # Controls
 
