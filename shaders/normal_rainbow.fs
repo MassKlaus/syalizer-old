@@ -22,7 +22,7 @@ void main()
     // Gaussian blur kernel weights
     float weight[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
 
-    const int range = 10;
+    const int range = 2;
     // Accumulate bloom effect
     for (int i = -range; i <= range; i++) {
         for (int j = -range; j <= range; j++) {

@@ -14,7 +14,7 @@ void main()
 
     vec3 color = texture(texture0, uv).rgb;
 
-    const int range = 5;
+    const int range = 3;
 
     vec2 found_pixel = vec2(0);
     float min_length = 100;
