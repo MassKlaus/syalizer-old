@@ -15,14 +15,18 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
     }
 
     if (rl.isKeyPressed(.escape)) {
-        plug_state.ClearFFT();
-        if (plug_state.music) |music| {
-            rl.stopMusicStream(music);
-            rl.detachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
-            rl.unloadMusicStream(music);
-            plug_state.music = null;
+        if (plug_state.display_shader_UI) {
+            plug_state.display_shader_UI = false;
+        } else {
+            plug_state.ClearFFT();
+            if (plug_state.music) |music| {
+                rl.stopMusicStream(music);
+                rl.detachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
+                rl.unloadMusicStream(music);
+                plug_state.music = null;
+            }
+            plug_state.goBack();
         }
-        plug_state.goBack();
     }
 
     if (rl.isKeyPressed(.m)) {
@@ -45,8 +49,42 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
     }
 
     if (rl.isKeyPressed(.r)) {
+        // create a memory copy of the shader names and then apply them again
+        var list = std.ArrayList([]u8).initCapacity(plug_state.allocator.*, plug_state.applied_shaders.items.len) catch @panic("Missing memory");
+        defer {
+            // free the copy strings
+            for (list.items) |value| {
+                plug_state.allocator.free(value);
+            }
+
+            // free the list
+            list.deinit();
+        }
+
+        // copy the selected shaders
+        for (0..plug_state.applied_shaders.items.len) |i| {
+            const applied_shader = plug_state.applied_shaders.items[i];
+
+            const copy = plug_state.allocator.alloc(u8, applied_shader.filename.len) catch @panic("Missing memory");
+            std.mem.copyForwards(u8, copy, applied_shader.filename);
+            list.appendAssumeCapacity(copy);
+        }
+
+        // refresh the shaders
         plug_state.UnloadShaders();
         plug_state.LoadShaders() catch @panic("Massive Error");
+        plug_state.applied_shaders.clearRetainingCapacity();
+
+        // apply shaders again
+        for (list.items) |name| {
+            const adapted_string = plug.AdaptString(name);
+            for (plug_state.shaders) |*shader| {
+                if (std.mem.eql(u8, shader.filename, adapted_string)) {
+                    plug_state.applied_shaders.appendAssumeCapacity(shader);
+                    break;
+                }
+            }
+        }
     }
 
     if (rl.isKeyPressed(.l)) {
@@ -276,7 +314,7 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.Ren
         rl.beginTextureMode(output_texture);
         defer rl.endTextureMode();
 
-        rl.clearBackground(plug_state.settings.back_color);
+        rl.clearBackground(rl.Color.blank);
 
         while (index < amplitudes.len and samples_per_point > 0 and max_amplitude > 0 and point_counter < points_size / 2) : (index += samples_per_point) {
             defer point_counter += 1;

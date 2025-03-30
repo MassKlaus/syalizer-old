@@ -72,6 +72,7 @@ pub const PlugState = struct {
         pressed_color: rl.Color,
         border_color: rl.Color,
         fps: i32,
+        background: ?[]u8,
 
         pub fn init() UserSettings {
             return .{
@@ -81,6 +82,7 @@ pub const PlugState = struct {
                 .focused_color = rl.Color.lime,
                 .pressed_color = rl.Color.dark_green,
                 .fps = 60,
+                .background = null,
             };
         }
     };
@@ -121,10 +123,12 @@ pub const PlugState = struct {
     // Collection Of Shaders
     shaders: []ShaderInfo,
 
-    render_texture: rl.RenderTexture2D = undefined,
-    shader_texture: rl.RenderTexture2D = undefined,
+    background_texture: ?rl.Texture2D = null,
     ping_texture: rl.RenderTexture2D = undefined,
     pong_texture: rl.RenderTexture2D = undefined,
+    render_texture: rl.RenderTexture2D = undefined,
+    shader_texture: rl.RenderTexture2D = undefined,
+    final_texture: rl.RenderTexture2D = undefined,
 
     // Enum State
     page: Pages = .SelectionMenu,
@@ -181,10 +185,10 @@ pub const PlugState = struct {
             .smooth_amplitudes = core.smooth_amplitudes[0..samplesize],
             .shaders = undefined,
             .songs = undefined,
+            .ping_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
+            .pong_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
             .render_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
             .shader_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the shader Texture"),
-            .ping_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the ping Texture"),
-            .pong_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the shader Texture"),
             .pages = std.ArrayList(Pages).init(allocator.*),
             .settings = UserSettings.init(),
             .log_file = file,
@@ -200,10 +204,16 @@ pub const PlugState = struct {
         self.UnloadSongList();
         rl.unloadTexture(self.render_texture.texture);
         rl.unloadTexture(self.shader_texture.texture);
+        if (self.background_texture) |bg| {
+            rl.unloadTexture(bg);
+        }
 
         self.applied_shaders.clearAndFree();
         self.pages.deinit();
         self.allocator.destroy(self.core);
+        if (self.settings.background) |bg| {
+            self.allocator.free(bg);
+        }
     }
 
     pub fn LoadShaders(self: *PlugState) !void {
@@ -231,6 +241,7 @@ pub const PlugState = struct {
         self.log("Shaders Walker Created", .{}, false);
 
         var shadersList = std.ArrayList(ShaderInfo).init(self.allocator.*);
+        errdefer shadersList.deinit();
 
         while (walker.next()) |Optionalentry| {
             if (Optionalentry) |entry| {
@@ -291,6 +302,7 @@ pub const PlugState = struct {
         self.log("Music Walker Created", .{}, false);
 
         var songList = std.ArrayList(SongInfo).init(self.allocator.*);
+        errdefer songList.deinit();
 
         while (walker.next()) |Optionalentry| {
             if (Optionalentry) |entry| {
@@ -393,7 +405,7 @@ pub const PlugState = struct {
                 const structInfo = typeInfo.Struct;
                 {
                     inline for (structInfo.fields) |field| {
-                        if (!comptime std.mem.eql(u8, field.name, "fps")) {
+                        if (comptime field.type == rl.Color) {
                             if (std.mem.eql(u8, field.name, name)) {
                                 @field(settings, field.name) = color;
                             }
@@ -405,6 +417,13 @@ pub const PlugState = struct {
             if (std.mem.eql(u8, name, "fps")) {
                 const fps_value = try std.fmt.parseInt(i32, value, 10);
                 settings.fps = fps_value;
+            }
+
+            if (std.mem.count(u8, name, "background") > 0) {
+                const trimmed_path = std.mem.trim(u8, value, " \t\n");
+                const path = try plug_state.allocator.alloc(u8, trimmed_path.len);
+                std.mem.copyForwards(u8, path, trimmed_path);
+                settings.background = path;
             }
         }
 
@@ -422,6 +441,8 @@ pub const PlugState = struct {
             } else if (field.type == rl.Color) {
                 const value = @field(plug_state.settings, field.name);
                 try writer.print("{s}={} {} {}\n", .{ field.name, value.r, value.g, value.b });
+            } else if (comptime std.mem.eql(u8, field.name, "background")) {
+                try writer.print("background={s}\n", .{plug_state.settings.background orelse ""});
             }
 
             std.log.info("Field", .{});
@@ -597,6 +618,22 @@ pub fn plugInit(plug_state: *PlugState) void {
         plug_state.log_info("Error: {}", .{err});
         @panic("Error: Failed to load Shader list.");
     };
+
+    if (plug_state.settings.background) |bg| bgscope: {
+        const background = rl.loadImage(AdaptString(bg)) catch |err| {
+            plug_state.log("Failed to load background.", .{}, true);
+            plug_state.log_info("Error: {}", .{err});
+            break :bgscope;
+        };
+
+        plug_state.background_texture = rl.loadTextureFromImage(background) catch |err| {
+            plug_state.log("Failed to load background.", .{}, true);
+            plug_state.log_info("Error: {}", .{err});
+            break :bgscope;
+        };
+
+        plug_state.log_info("Loaded background successfully.", .{});
+    }
 }
 
 fn SetupGuiStyle(plug_state: *PlugState) void {
@@ -690,6 +727,12 @@ pub fn PrintTextureToScreen(plug_state: *PlugState, texture: rl.RenderTexture, i
     rl.beginDrawing();
     defer rl.endDrawing();
 
+    if (plug_state.background_texture) |bg| {
+        rl.drawTextureRec(bg, rl.Rectangle.init(0, 0, 1920, 1080), rl.Vector2.init(0, 0), rl.Color.white);
+    } else {
+        rl.clearBackground(rl.Color.blank);
+    }
+
     rl.drawTextureRec(texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
 
     if (infoRender) |extraRender| {
@@ -702,12 +745,24 @@ pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTex
         // No shaders, copy input directly to output
         rl.beginTextureMode(output_texture);
         defer rl.endTextureMode();
+
+        rl.clearBackground(rl.Color.blank);
+
         rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
         return;
     }
 
-    var ping = input_texture;
-    var pong = output_texture;
+    {
+        rl.beginTextureMode(plug_state.ping_texture);
+        defer rl.endTextureMode();
+
+        rl.clearBackground(rl.Color.blank);
+
+        rl.drawTextureRec(input_texture.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
+    }
+
+    var ping = &plug_state.ping_texture;
+    var pong = &plug_state.pong_texture;
 
     for (plug_state.applied_shaders.items) |shader| {
         ApplyShaderToTexture(shader, ping, pong);
@@ -721,15 +776,17 @@ pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTex
         rl.beginTextureMode(output_texture);
         defer rl.endTextureMode();
 
-        if (@mod(plug_state.applied_shaders.items.len, 2) == 0) {
-            rl.drawTextureRec(ping.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
-        }
+        rl.clearBackground(rl.Color.blank);
+
+        rl.drawTextureRec(ping.texture, rl.Rectangle.init(0, 0, 1920, -1080), rl.Vector2.init(0, 0), rl.Color.white);
     }
 }
 
-fn ApplyShaderToTexture(shader: *PlugState.ShaderInfo, input_texture: rl.RenderTexture2D, output_texture: rl.RenderTexture2D) void {
-    rl.beginTextureMode(output_texture);
+fn ApplyShaderToTexture(shader: *PlugState.ShaderInfo, input_texture: *const rl.RenderTexture2D, output_texture: *const rl.RenderTexture2D) void {
+    rl.beginTextureMode(output_texture.*);
     defer rl.endTextureMode();
+
+    rl.clearBackground(rl.Color.blank);
 
     rl.beginShaderMode(shader.shader);
     defer rl.endShaderMode();
