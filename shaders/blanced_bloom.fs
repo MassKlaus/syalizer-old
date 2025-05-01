@@ -13,6 +13,7 @@ void main() {
     vec2 uv = gl_FragCoord.xy / resolution;
 
     vec3 color = texture(texture0, uv).rgb;
+    float alpha = texture(texture0, uv).a;
     vec3 bloom = vec3(0.0);
 
     // Gaussian blur kernel weights
@@ -24,10 +25,11 @@ void main() {
         for (int j = -range; j <= range; j++) {
             float w = weight[abs(i)] * weight[abs(j)];
             bloom += texture(texture0, uv + vec2(i, j) * texel).rgb * w;
+            alpha += 0.1;
         }
     }
 
     bloom *= intensity;
 
-    fragColor = vec4(color + bloom, 1.0);
+    fragColor = vec4(color + bloom, alpha);
 }

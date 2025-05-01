@@ -10,8 +10,10 @@ const settings_page = @import("pages/settings.zig");
 
 var global_plug_state: *PlugState = undefined;
 
-const max_level = 16;
+const max_level = 20;
 const max_samplesize = std.math.pow(u64, 2, max_level);
+const block_size: u64 = 1024;
+const block_count = @min(@divFloor(max_samplesize, 1024), 43);
 pub var text_buffer: [1024]u8 = [1]u8{0} ** 1024;
 pub var zero_terminated_buffer: [1024]u8 = [1]u8{0} ** 1024;
 
@@ -63,6 +65,9 @@ pub const PlugState = struct {
         log_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         smear_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
         smooth_amplitudes: [max_samplesize]f32 = [1]f32{0.0} ** max_samplesize,
+
+        // for beat detection
+        energy_blocks: [block_count]f32 = [1]f32{0.0} ** block_count,
     };
 
     const UserSettings = struct {
@@ -103,10 +108,16 @@ pub const PlugState = struct {
     log_amplitudes: []f32,
     smear_amplitudes: []f32,
     smooth_amplitudes: []f32,
+    energy_blocks: []f32,
+
     max_amplitude: f32 = 0,
     max_log_amplitude: f32 = 0,
     max_smooth_amplitude: f32 = 0,
     max_smear_amplitude: f32 = 0,
+    energy_block_index: u64 = 0,
+    sample_accumulator: u64 = 0,
+    energy_block_counter: u64 = 0,
+    is_a_beat: bool = false,
 
     // Output amplifier
     amplify: f32 = 1,
@@ -137,8 +148,8 @@ pub const PlugState = struct {
     processing_mode: ProcessingMode = .normal,
 
     // Render Tracking
-    render_total_frames: f32 = 1,
-    render_frame_counter: f32 = 1,
+    render_total_frames: f32 = 0,
+    render_frame_counter: f32 = 0,
 
     // Togglable Edits
     toggle_lines: bool = false,
@@ -166,7 +177,7 @@ pub const PlugState = struct {
 
         // This avoid the issue of stack moving of the value keeping us safe from any un-intended creations
         var core = allocator.create(PlugCore) catch @panic("Memory is not enough to create core");
-        const samplesize = std.math.pow(u64, 2, sample_level);
+        const samplesize = std.math.pow(u64, 2, @min(max_level, sample_level));
 
         const file = std.fs.cwd().createFile("./output.log", .{ .truncate = true }) catch @panic("Cannot create file");
 
@@ -183,6 +194,7 @@ pub const PlugState = struct {
             .log_amplitudes = core.log_amplitudes[0..samplesize],
             .smear_amplitudes = core.smear_amplitudes[0..samplesize],
             .smooth_amplitudes = core.smooth_amplitudes[0..samplesize],
+            .energy_blocks = core.energy_blocks[0..block_count],
             .shaders = undefined,
             .songs = undefined,
             .ping_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
@@ -218,9 +230,9 @@ pub const PlugState = struct {
 
     pub fn LoadShaders(self: *PlugState) !void {
         var shaders_dir = std.fs.cwd().openDir("./shaders", .{ .iterate = true }) catch blk: {
-            self.log_info("Failed to open shader folder, trying to create it.", .{});
+            self.logInfo("Failed to open shader folder, trying to create it.", .{});
             std.fs.cwd().makeDir("./shaders") catch |err| {
-                self.log_error("Failed to create shader folder. Quitting", .{});
+                self.logError("Failed to create shader folder. Quitting", .{});
                 return err;
             };
 
@@ -234,7 +246,7 @@ pub const PlugState = struct {
         self.log("Shaders Folder Opened", .{}, false);
 
         var walker = shaders_dir.walk(self.allocator.*) catch |err| {
-            self.log_error("Failed to initalize shader walker.", .{});
+            self.logError("Failed to initalize shader walker.", .{});
             return err;
         };
         defer walker.deinit();
@@ -245,6 +257,7 @@ pub const PlugState = struct {
 
         while (walker.next()) |Optionalentry| {
             if (Optionalentry) |entry| {
+                if (!std.ascii.endsWithIgnoreCase(entry.basename, ".fs")) continue;
                 self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
 
                 const path: []const u8 = try shaders_dir.realpath(entry.path, &text_buffer);
@@ -260,12 +273,12 @@ pub const PlugState = struct {
                 try shadersList.append(shader);
             } else break;
         } else |err| {
-            self.log_error("Walker Errored. {}", .{err});
+            self.logError("Walker Errored. {}", .{err});
             return err;
         }
 
         self.shaders = try shadersList.toOwnedSlice();
-        self.log_info("{} Shaders Loaded", .{self.shaders.len});
+        self.logInfo("{} Shaders Loaded", .{self.shaders.len});
     }
 
     pub fn UnloadShaders(self: *PlugState) void {
@@ -277,11 +290,12 @@ pub const PlugState = struct {
         self.allocator.free(self.shaders);
     }
 
+    const validSongExtensions = [_][]const u8{ ".mp3", ".flac", ".wav", ".ogg", ".qoa", ".xm", ".mod" };
     pub fn LoadSongList(self: *PlugState) !void {
         var songs_dir = std.fs.cwd().openDir("./music", .{ .iterate = true }) catch blk: {
-            self.log_info("Failed to open music folder, trying to create it.", .{});
+            self.logInfo("Failed to open music folder, trying to create it.", .{});
             std.fs.cwd().makeDir("./music") catch |err| {
-                self.log_error("Failed to create music folder. Quitting", .{});
+                self.logError("Failed to create music folder. Quitting", .{});
                 return err;
             };
 
@@ -294,7 +308,7 @@ pub const PlugState = struct {
         self.log("Music Folder Opened", .{}, false);
 
         var walker = songs_dir.walk(self.allocator.*) catch |err| {
-            self.log_error("Failed to initalize song walker.", .{});
+            self.logError("Failed to initalize song walker.", .{});
             return err;
         };
         defer walker.deinit();
@@ -306,6 +320,12 @@ pub const PlugState = struct {
 
         while (walker.next()) |Optionalentry| {
             if (Optionalentry) |entry| {
+                const valid_extension = for (validSongExtensions) |extension| {
+                    if (std.ascii.endsWithIgnoreCase(entry.basename, extension)) break true;
+                } else false;
+
+                if (!valid_extension) continue;
+
                 self.log("Handling Entry \"{s}\"", .{entry.basename}, false);
                 const path: []const u8 = try songs_dir.realpath(entry.path, &text_buffer);
                 const valid_path = try AdaptStringAlloc(self.allocator, path);
@@ -317,12 +337,12 @@ pub const PlugState = struct {
 
             break;
         } else |err| {
-            self.log_error("Walker Errored. {}", .{err});
+            self.logError("Walker Errored. {}", .{err});
             return err;
         }
 
         self.songs = try songList.toOwnedSlice();
-        self.log_info("{} Songs Loaded", .{self.songs.len});
+        self.logInfo("{} Songs Loaded", .{self.songs.len});
     }
 
     pub fn UnloadSongList(self: *PlugState) void {
@@ -345,8 +365,15 @@ pub const PlugState = struct {
             plug_state.complex_samples[i] = Complex(f32).init(0, 0);
         }
 
-        plug_state.render_frame_counter = 1;
-        plug_state.render_total_frames = 1;
+        for (0..plug_state.energy_blocks.len) |i| {
+            plug_state.energy_blocks[i] = 0.0;
+        }
+
+        plug_state.sample_accumulator = 0;
+        plug_state.energy_block_index = 0;
+        plug_state.energy_block_counter = 0;
+        plug_state.render_frame_counter = 0;
+        plug_state.render_total_frames = 0;
     }
 
     pub fn NavigateTo(plug_state: *PlugState, page: Pages) void {
@@ -444,8 +471,6 @@ pub const PlugState = struct {
             } else if (comptime std.mem.eql(u8, field.name, "background")) {
                 try writer.print("background={s}\n", .{plug_state.settings.background orelse ""});
             }
-
-            std.log.info("Field", .{});
         }
     }
 
@@ -461,12 +486,45 @@ pub const PlugState = struct {
         plug_state.log_writer.print("\n", .{}) catch @panic("Failed to print");
     }
 
-    pub inline fn log_info(plug_state: *PlugState, comptime format: []const u8, args: anytype) void {
+    pub inline fn logInfo(plug_state: *PlugState, comptime format: []const u8, args: anytype) void {
         log(plug_state, format, args, false);
     }
 
-    pub inline fn log_error(plug_state: *PlugState, comptime format: []const u8, args: anytype) void {
+    pub inline fn logError(plug_state: *PlugState, comptime format: []const u8, args: anytype) void {
         log(plug_state, format, args, true);
+    }
+
+    pub fn pushEnergyBlock(plug_state: *PlugState, energy: f32) void {
+        plug_state.is_a_beat = plug_state.isItABeat(energy);
+
+        plug_state.energy_block_counter += 1;
+        plug_state.energy_blocks[plug_state.energy_block_index] = energy;
+        plug_state.energy_block_index = (plug_state.energy_block_index + 1) % plug_state.energy_blocks.len;
+    }
+
+    pub fn lastEnergyBlock(plug_state: *PlugState) f32 {
+        if (plug_state.energy_block_index == 0) return plug_state.energy_blocks[plug_state.energy_blocks.len - 1];
+        return plug_state.energy_blocks[plug_state.energy_block_index - 1];
+    }
+
+    pub fn isItABeat(plug_state: *PlugState, energy_block: f32) bool {
+        var sum: f32 = 0.0;
+        for (plug_state.energy_blocks) |block| {
+            sum += block;
+        }
+
+        const average_energy = sum / @as(f32, @floatFromInt(plug_state.energy_blocks.len));
+
+        var variance: f32 = 0.0;
+        for (plug_state.energy_blocks) |block| {
+            variance += (block - average_energy) * (block - average_energy);
+        }
+
+        variance = variance / @as(f32, @floatFromInt(plug_state.energy_blocks.len));
+
+        const c = std.math.clamp((-0.0025714 * variance) + 1.5142857, 1.3, 1.7);
+
+        return energy_block > c * average_energy;
     }
 };
 
@@ -501,13 +559,14 @@ pub fn CollectAudioSamples(buffer: ?*anyopaque, frames: c_uint) callconv(.C) voi
 }
 
 pub fn CollectAudioSamplesZig(samples: []const f32, channels: usize) void {
-    for (samples, 0..) |sample, i| {
+    const sized_samples = if (samples.len > global_plug_state.temp_buffer.len) samples[0..global_plug_state.temp_buffer.len] else samples;
+    for (sized_samples, 0..) |sample, i| {
         if (i % channels == 0) {
             global_plug_state.temp_buffer[i / channels] = sample;
         }
     }
 
-    var sliced_data: []const f32 = global_plug_state.temp_buffer[0..@divFloor(samples.len, channels)];
+    var sliced_data: []const f32 = global_plug_state.temp_buffer[0..@divFloor(sized_samples.len, channels)];
 
     if (sliced_data.len > global_plug_state.samples.len) {
         sliced_data = sliced_data[(sliced_data.len - global_plug_state.samples.len)..];
@@ -516,11 +575,25 @@ pub fn CollectAudioSamplesZig(samples: []const f32, channels: usize) void {
     std.mem.rotate(f32, global_plug_state.samples, sliced_data.len);
     const target_write = global_plug_state.samples[(global_plug_state.samples.len - sliced_data.len)..];
     std.mem.copyForwards(f32, target_write, sliced_data);
+
+    global_plug_state.sample_accumulator += sliced_data.len;
+
+    const gap = global_plug_state.sample_accumulator - (global_plug_state.energy_block_counter * block_size);
+
+    if (gap >= block_size) {
+        const energy_block_samples = global_plug_state.samples[global_plug_state.samples.len - gap ..][0..block_size];
+        var energy_block: f32 = 0.0;
+
+        for (energy_block_samples) |sample| {
+            energy_block += sample * sample;
+        }
+
+        global_plug_state.pushEnergyBlock(energy_block / block_size);
+    }
 }
 
 pub fn AnalyzeAudioSignal(plug_state: *PlugState, delta_time: f32) usize {
     // Smooth the audio
-
     for (plug_state.samples, 0..) |sample, i| {
         const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(plug_state.samples.len));
         const hann: f32 = 0.5 - 0.5 * std.math.cos(2 * std.math.pi * t);
@@ -594,7 +667,7 @@ pub fn plugInit(plug_state: *PlugState) void {
     global_plug_state = plug_state;
     plug_state.settings = plug_state.loadConfig() catch blk: {
         plug_state.saveConfig() catch {
-            plug_state.log_error("Failed to setup Config.", .{});
+            plug_state.logError("Failed to setup Config.", .{});
         };
         break :blk PlugState.UserSettings.init();
     };
@@ -609,30 +682,30 @@ pub fn plugInit(plug_state: *PlugState) void {
 
     plug_state.LoadSongList() catch |err| {
         plug_state.log("Failed to load Song List.", .{}, true);
-        plug_state.log_info("Error: {}", .{err});
+        plug_state.logInfo("Error: {}", .{err});
         @panic("Error: Failed to load Song list.");
     };
 
     plug_state.LoadShaders() catch |err| {
         plug_state.log("Failed to load Shader List.", .{}, true);
-        plug_state.log_info("Error: {}", .{err});
+        plug_state.logInfo("Error: {}", .{err});
         @panic("Error: Failed to load Shader list.");
     };
 
     if (plug_state.settings.background) |bg| bgscope: {
         const background = rl.loadImage(AdaptString(bg)) catch |err| {
             plug_state.log("Failed to load background.", .{}, true);
-            plug_state.log_info("Error: {}", .{err});
+            plug_state.logInfo("Error: {}", .{err});
             break :bgscope;
         };
 
         plug_state.background_texture = rl.loadTextureFromImage(background) catch |err| {
             plug_state.log("Failed to load background.", .{}, true);
-            plug_state.log_info("Error: {}", .{err});
+            plug_state.logInfo("Error: {}", .{err});
             break :bgscope;
         };
 
-        plug_state.log_info("Loaded background successfully.", .{});
+        plug_state.logInfo("Loaded background successfully.", .{});
     }
 }
 
@@ -723,7 +796,7 @@ pub fn plugUpdate(plug_state: *PlugState) void {
     }
 }
 
-pub fn PrintTextureToScreen(plug_state: *PlugState, texture: rl.RenderTexture, infoRender: ?(fn (plug_state: *PlugState) void)) void {
+pub fn PrintTextureToScreen(plug_state: *PlugState, texture: *rl.RenderTexture, infoRender: ?(fn (plug_state: *PlugState) void)) void {
     rl.beginDrawing();
     defer rl.endDrawing();
 
@@ -740,10 +813,10 @@ pub fn PrintTextureToScreen(plug_state: *PlugState, texture: rl.RenderTexture, i
     }
 }
 
-pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTexture2D, output_texture: rl.RenderTexture2D) void {
+pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: *rl.RenderTexture2D, output_texture: *rl.RenderTexture2D) void {
     if (!plug_state.apply_shader_stack or plug_state.applied_shaders.items.len == 0) {
         // No shaders, copy input directly to output
-        rl.beginTextureMode(output_texture);
+        rl.beginTextureMode(output_texture.*);
         defer rl.endTextureMode();
 
         rl.clearBackground(rl.Color.blank);
@@ -773,7 +846,7 @@ pub fn ApplyShadersToTexture(plug_state: *PlugState, input_texture: rl.RenderTex
     }
 
     {
-        rl.beginTextureMode(output_texture);
+        rl.beginTextureMode(output_texture.*);
         defer rl.endTextureMode();
 
         rl.clearBackground(rl.Color.blank);

@@ -63,7 +63,7 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
         const button_rectangle = rl.Rectangle.init(@floatFromInt(base_x), @floatFromInt(position_y), @floatFromInt(max_width), button_height);
 
         if (rg.guiButton(button_rectangle, text) != 0) {
-            plug_state.log_info("Song \"{s}\" Selected.", .{song.path});
+            plug_state.logInfo("Song \"{s}\" Selected.", .{song.path});
 
             plug_state.NavigateTo(.Visualizer);
 
@@ -71,6 +71,9 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
 
             plug_state.music = music;
             plug_state.song = song;
+            plug_state.pause = false;
+            plug_state.music_volume = rl.getMasterVolume();
+            plug_state.ClearFFT();
 
             rl.attachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
             rl.playMusicStream(music);

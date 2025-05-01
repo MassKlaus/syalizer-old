@@ -6,6 +6,69 @@ Drop a song in the music folder named with MusicMoment.wav and the song should s
 
 Project inspired by Mualizer
 
+# Roadmap
+
+To make your music visualizer really nice to use, consider adding these features:
+
+- [ ] **Customizable Themes:**
+    - [x] Allow background color customization.
+    - [x] Allow foreground color customization.
+    - [x] Allow border color customization.
+    - [ ] Allow shape customization beyond current render modes (lines, circle, bars).
+    - [ ] Implement preset themes.
+    - [ ] Allow user to save/load custom themes.
+
+- [ ] **3D Visuals:**
+    - [ ] Implement basic 3D effects (rotating cubes, simple particle systems).
+    - [ ] Implement advanced 3D effects (waves, complex particle systems).
+    - [ ] Add controls for 3D camera movement (zoom, rotation, position).
+    - [ ] Allow user to customize 3D parameters.
+    - [ ] Implement 3D Render Mode.
+
+- [ ] **Advanced Shader Effects:**
+    - [X] Implement basic GLSL shader effects.
+    - [X] Implement advanced GLSL shader effects for dynamic visuals.
+    - [X] Allow user to load custom shaders.
+    - [ ] Add more complex shader settings that can be controller from the menu.
+
+- [ ] **Enhanced Beat Sync Effects:**
+    - [ ] Energy beat detection.
+    - [ ] Spectral beat detection.
+    - [ ] Make visual elements react more precisely to audio beats.
+    - [ ] Add options for different beat-reactive effects.
+    - [ ] Implement visual effects that react to specific frequency ranges.
+
+- [ ] **Multi-Channel Analysis:**
+    - [ ] Implement separate visual effects for vocals, bass, and treble.
+    - [ ] Allow user to customize visual effects for each channel.
+    - [ ] Display individual channel visualizations.
+
+- [ ] **Playlist Support:**
+    - [ ] Implement local playlist support.
+    - [ ] Integrate with online music streaming services.
+    - [ ] Add playlist management features (add, remove, shuffle).
+
+- [ ] **Recording & Export:**
+    - [ ] Allow users to save visualizations as videos.
+    - [ ] Add options for video resolution and quality.
+
+- [ ] **VJ Mode:**
+    - [ ] Implement synchronization with DJ software.
+    - [ ] Add controls for VJ-specific features.
+    - [ ] Allow user to map visual effects to MIDI controllers.
+
+- [ ] **More UI Options:**
+    - [ ] Move away from raygui and into Imgui (possibly).
+    - [ ] Add more user interface customization options.
+    - [ ] Improve UI responsiveness.
+    - [ ] Add more visual adjustment sliders and buttons.
+
+- [ ] **Settings Menu:**
+    - [ ] Implement a settings menu for user preferences.
+    - [ ] Allow users to adjust audio input/output settings.
+    - [ ] Allow users to adjust performance settings.
+
+
 # How to use
 
 Place any song in the music folder then start app, select song and enjoy.

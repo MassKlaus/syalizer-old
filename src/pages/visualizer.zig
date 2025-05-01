@@ -232,9 +232,9 @@ pub fn RenderVisualizerPage(plug_state: *PlugState) void {
             const delta_time = rl.getFrameTime();
             const amp_data = plug.getAmplitudesToRender(plug_state, delta_time);
 
-            RenderVisualizerFrameToTexture(plug_state, plug_state.render_texture, amp_data.amps, amp_data.max);
-            plug.ApplyShadersToTexture(plug_state, plug_state.render_texture, plug_state.shader_texture);
-            plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerInfo);
+            RenderVisualizerFrameToTexture(plug_state, &plug_state.render_texture, amp_data.amps, amp_data.max);
+            plug.ApplyShadersToTexture(plug_state, &plug_state.render_texture, &plug_state.shader_texture);
+            plug.PrintTextureToScreen(plug_state, &plug_state.shader_texture, RenderVisualizerInfo);
         },
         .video => {
             RenderVisualizeVideoWithFFMPEG(plug_state);
@@ -290,7 +290,7 @@ fn CalculateCirclePointPositions(plug_state: *PlugState, bottom_points: []rl.Vec
     }
 }
 
-fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32) void {
+fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: *rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32) void {
     const amount_of_points: usize = 50;
     const samples_per_point: usize = @divFloor(amplitudes.len, amount_of_points);
     const points_size = (amount_of_points + 1) * 2;
@@ -311,7 +311,7 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.Ren
     var point_counter: usize = 0;
 
     {
-        rl.beginTextureMode(output_texture);
+        rl.beginTextureMode(output_texture.*);
         defer rl.endTextureMode();
 
         rl.clearBackground(rl.Color.blank);
@@ -356,6 +356,13 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: rl.Ren
             rl.drawLineStrip(&bottom_points, plug_state.settings.front_color);
             rl.drawLineStrip(&top_points, plug_state.settings.front_color);
         }
+
+        // if (plug_state.is_a_beat) {
+        //     rl.drawCircle(0, 0, 200, plug_state.settings.front_color);
+        //     rl.drawCircle(output_texture.texture.width, 0, 200, plug_state.settings.front_color);
+        //     rl.drawCircle(output_texture.texture.width, output_texture.texture.height, 200, plug_state.settings.front_color);
+        //     rl.drawCircle(0, output_texture.texture.height, 200, plug_state.settings.front_color);
+        // }
     }
 }
 
@@ -406,13 +413,13 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
 
         const amp_data = plug.getAmplitudesToRender(plug_state, delta_time);
 
-        RenderVisualizerFrameToTexture(plug_state, plug_state.render_texture, amp_data.amps, amp_data.max);
-        plug.ApplyShadersToTexture(plug_state, plug_state.render_texture, plug_state.shader_texture);
+        RenderVisualizerFrameToTexture(plug_state, &plug_state.render_texture, amp_data.amps, amp_data.max);
+        plug.ApplyShadersToTexture(plug_state, &plug_state.render_texture, &plug_state.shader_texture);
 
         const image = rl.loadImageFromTexture(plug_state.shader_texture.texture) catch continue;
         defer rl.unloadImage(image);
 
-        plug.PrintTextureToScreen(plug_state, plug_state.shader_texture, RenderVisualizerInfo);
+        plug.PrintTextureToScreen(plug_state, &plug_state.shader_texture, RenderVisualizerInfo);
 
         const pixels_raw: [*]const u8 = @ptrCast(@alignCast(image.data));
 
