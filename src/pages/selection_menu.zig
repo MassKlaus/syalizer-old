@@ -43,7 +43,7 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
         max_width += 13;
     }
 
-    _ = rg.guiScrollPanel(rl.Rectangle.init(0, 18, @floatFromInt(halfScreen), @floatFromInt(screenHeight)), "Music Selection Menu", rl.Rectangle.init(0, 0, @as(f32, @floatFromInt(halfScreen)), @as(f32, @floatFromInt(panel_height))), &scrollOffset, &renderContent);
+    _ = rg.scrollPanel(rl.Rectangle.init(0, 18, @floatFromInt(halfScreen), @floatFromInt(screenHeight)), "Music Selection Menu", rl.Rectangle.init(0, 0, @as(f32, @floatFromInt(halfScreen)), @as(f32, @floatFromInt(panel_height))), &scrollOffset, &renderContent);
 
     rl.beginScissorMode(0, 42, halfScreen, screenHeight);
     defer rl.endScissorMode();
@@ -62,7 +62,7 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
 
         const button_rectangle = rl.Rectangle.init(@floatFromInt(base_x), @floatFromInt(position_y), @floatFromInt(max_width), button_height);
 
-        if (rg.guiButton(button_rectangle, text) != 0) {
+        if (rg.button(button_rectangle, text)) {
             plug_state.logInfo("Song \"{s}\" Selected.", .{song.path});
 
             plug_state.NavigateTo(.Visualizer);

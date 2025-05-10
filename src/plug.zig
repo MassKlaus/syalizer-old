@@ -95,7 +95,7 @@ pub const PlugState = struct {
     // hardcoded arrays
     core: *PlugCore,
 
-    allocator: *std.mem.Allocator,
+    allocator: std.mem.Allocator,
 
     // Buffers holding the different data used to render the sound
     samplesize: u64,
@@ -163,14 +163,14 @@ pub const PlugState = struct {
     log_writer: std.fs.File.Writer,
 
     //Page stack
-    pages: std.ArrayList(Pages),
+    pages: std.ArrayListUnmanaged(Pages),
     settings: UserSettings,
 
     // Shader Stack: Allows applying multiple shaders in series by order
     apply_shader_stack: bool = false,
-    applied_shaders: std.ArrayList(*ShaderInfo),
+    applied_shaders: std.ArrayListUnmanaged(*ShaderInfo),
 
-    pub fn init(allocator: *std.mem.Allocator, sample_level: usize) PlugError!PlugState {
+    pub fn init(allocator: std.mem.Allocator, sample_level: usize) PlugError!PlugState {
         if (sample_level > max_level) {
             return PlugError.TooLarge;
         }
@@ -201,11 +201,11 @@ pub const PlugState = struct {
             .pong_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
             .render_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the render Texture"),
             .shader_texture = rl.loadRenderTexture(1920, 1080) catch @panic("Failed to create the shader Texture"),
-            .pages = std.ArrayList(Pages).init(allocator.*),
+            .pages = std.ArrayListUnmanaged(Pages){},
             .settings = UserSettings.init(),
             .log_file = file,
             .log_writer = file.writer(),
-            .applied_shaders = std.ArrayList(*ShaderInfo).init(allocator.*),
+            .applied_shaders = std.ArrayListUnmanaged(*ShaderInfo){},
         };
 
         return emu;
@@ -220,8 +220,8 @@ pub const PlugState = struct {
             rl.unloadTexture(bg);
         }
 
-        self.applied_shaders.clearAndFree();
-        self.pages.deinit();
+        self.applied_shaders.clearAndFree(self.allocator);
+        self.pages.deinit(self.allocator);
         self.allocator.destroy(self.core);
         if (self.settings.background) |bg| {
             self.allocator.free(bg);
@@ -245,14 +245,14 @@ pub const PlugState = struct {
 
         self.log("Shaders Folder Opened", .{}, false);
 
-        var walker = shaders_dir.walk(self.allocator.*) catch |err| {
+        var walker = shaders_dir.walk(self.allocator) catch |err| {
             self.logError("Failed to initalize shader walker.", .{});
             return err;
         };
         defer walker.deinit();
         self.log("Shaders Walker Created", .{}, false);
 
-        var shadersList = std.ArrayList(ShaderInfo).init(self.allocator.*);
+        var shadersList = std.ArrayList(ShaderInfo).init(self.allocator);
         errdefer shadersList.deinit();
 
         while (walker.next()) |Optionalentry| {
@@ -307,7 +307,7 @@ pub const PlugState = struct {
 
         self.log("Music Folder Opened", .{}, false);
 
-        var walker = songs_dir.walk(self.allocator.*) catch |err| {
+        var walker = songs_dir.walk(self.allocator) catch |err| {
             self.logError("Failed to initalize song walker.", .{});
             return err;
         };
@@ -315,7 +315,7 @@ pub const PlugState = struct {
 
         self.log("Music Walker Created", .{}, false);
 
-        var songList = std.ArrayList(SongInfo).init(self.allocator.*);
+        var songList = std.ArrayList(SongInfo).init(self.allocator);
         errdefer songList.deinit();
 
         while (walker.next()) |Optionalentry| {
@@ -377,12 +377,12 @@ pub const PlugState = struct {
     }
 
     pub fn NavigateTo(plug_state: *PlugState, page: Pages) void {
-        plug_state.pages.append(page) catch @panic("Failed to append page.");
+        plug_state.pages.append(plug_state.allocator, page) catch @panic("Failed to append page.");
         plug_state.page = page;
     }
 
     pub fn goBack(plug_state: *PlugState) void {
-        _ = plug_state.pages.popOrNull();
+        _ = plug_state.pages.pop();
 
         if (plug_state.pages.items.len != 0) {
             plug_state.page = plug_state.pages.items[plug_state.pages.items.len - 1];
@@ -393,7 +393,7 @@ pub const PlugState = struct {
         var file = try std.fs.cwd().openFile(".config", .{ .mode = .read_only });
         defer file.close();
 
-        const content = try file.readToEndAlloc(plug_state.allocator.*, 999_999_999);
+        const content = try file.readToEndAlloc(plug_state.allocator, 999_999_999);
         defer plug_state.allocator.free(content);
 
         var settings = UserSettings.init();
@@ -429,7 +429,7 @@ pub const PlugState = struct {
                 const color = rl.Color.init(red, green, blue, 255);
 
                 const typeInfo = @typeInfo(UserSettings);
-                const structInfo = typeInfo.Struct;
+                const structInfo = typeInfo.@"struct";
                 {
                     inline for (structInfo.fields) |field| {
                         if (comptime field.type == rl.Color) {
@@ -461,7 +461,7 @@ pub const PlugState = struct {
         var file = try std.fs.cwd().createFile(".config", .{});
         const writer = file.writer();
         const typeInfo = @typeInfo(UserSettings);
-        const structInfo = typeInfo.Struct;
+        const structInfo = typeInfo.@"struct";
         inline for (structInfo.fields) |field| {
             if (comptime std.mem.eql(u8, field.name, "fps")) {
                 try writer.print("fps={}\n", .{plug_state.settings.fps});
@@ -710,20 +710,20 @@ pub fn plugInit(plug_state: *PlugState) void {
 }
 
 fn SetupGuiStyle(plug_state: *PlugState) void {
-    rg.guiSetStyle(.default, rg.GuiControlProperty.base_color_normal, plug_state.settings.back_color.toInt());
-    rg.guiSetStyle(.default, rg.GuiControlProperty.border_color_normal, plug_state.settings.front_color.toInt());
-    rg.guiSetStyle(.default, rg.GuiControlProperty.text_color_normal, plug_state.settings.front_color.toInt());
+    rg.setStyle(.default, .{ .control = .base_color_normal }, plug_state.settings.back_color.toInt());
+    rg.setStyle(.default, .{ .control = .border_color_normal }, plug_state.settings.front_color.toInt());
+    rg.setStyle(.default, .{ .control = .text_color_normal }, plug_state.settings.front_color.toInt());
 
-    rg.guiSetStyle(.default, rg.GuiControlProperty.base_color_pressed, plug_state.settings.back_color.toInt());
-    rg.guiSetStyle(.default, rg.GuiControlProperty.border_color_pressed, plug_state.settings.pressed_color.toInt());
-    rg.guiSetStyle(.default, rg.GuiControlProperty.text_color_pressed, plug_state.settings.pressed_color.toInt());
+    rg.setStyle(.default, .{ .control = .base_color_pressed }, plug_state.settings.back_color.toInt());
+    rg.setStyle(.default, .{ .control = .border_color_pressed }, plug_state.settings.pressed_color.toInt());
+    rg.setStyle(.default, .{ .control = .text_color_pressed }, plug_state.settings.pressed_color.toInt());
 
-    rg.guiSetStyle(.default, rg.GuiControlProperty.base_color_focused, plug_state.settings.back_color.toInt());
-    rg.guiSetStyle(.default, rg.GuiControlProperty.border_color_focused, plug_state.settings.focused_color.toInt());
-    rg.guiSetStyle(.default, rg.GuiControlProperty.text_color_focused, plug_state.settings.focused_color.toInt());
+    rg.setStyle(.default, .{ .control = .base_color_focused }, plug_state.settings.back_color.toInt());
+    rg.setStyle(.default, .{ .control = .border_color_focused }, plug_state.settings.focused_color.toInt());
+    rg.setStyle(.default, .{ .control = .text_color_focused }, plug_state.settings.focused_color.toInt());
 
-    rg.guiSetStyle(.listview, rg.GuiControlProperty.border_color_focused, plug_state.settings.front_color.toInt());
-    rg.guiSetStyle(.listview, rg.GuiControlProperty.border_color_pressed, plug_state.settings.front_color.toInt());
+    rg.setStyle(.listview, .{ .control = .border_color_focused }, plug_state.settings.front_color.toInt());
+    rg.setStyle(.listview, .{ .control = .border_color_pressed }, plug_state.settings.front_color.toInt());
 }
 
 pub fn AdaptString(text: []const u8) [:0]const u8 {
@@ -732,7 +732,7 @@ pub fn AdaptString(text: []const u8) [:0]const u8 {
     return zero_terminated_buffer[0..text.len :0];
 }
 
-pub fn AdaptStringAlloc(allocator: *std.mem.Allocator, text: []const u8) ![:0]const u8 {
+pub fn AdaptStringAlloc(allocator: std.mem.Allocator, text: []const u8) ![:0]const u8 {
     var zero_terminated_text = try allocator.alloc(u8, text.len + 1);
     std.mem.copyForwards(u8, zero_terminated_text, text);
     zero_terminated_text[text.len] = 0;

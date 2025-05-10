@@ -50,7 +50,7 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
 
     if (rl.isKeyPressed(.r)) {
         // create a memory copy of the shader names and then apply them again
-        var list = std.ArrayList([]u8).initCapacity(plug_state.allocator.*, plug_state.applied_shaders.items.len) catch @panic("Missing memory");
+        var list = std.ArrayList([]u8).initCapacity(plug_state.allocator, plug_state.applied_shaders.items.len) catch @panic("Missing memory");
         defer {
             // free the copy strings
             for (list.items) |value| {
@@ -152,7 +152,7 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
         rl.drawRectangle(offset_x, offset_y, width, height, plug_state.settings.back_color);
 
         rl.drawText("Applied Shader List", offset_x + 10, offset_y + 20, 16, plug_state.settings.front_color);
-        _ = rg.guiToggle(utils.init(offset_x + width - 100, offset_y + 10, 90, 50), "Enable", &plug_state.apply_shader_stack);
+        _ = rg.toggle(utils.init(offset_x + width - 100, offset_y + 10, 90, 50), "Enable", &plug_state.apply_shader_stack);
 
         const button_height: i32 = 200;
 
@@ -174,7 +174,7 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
             const stack_y: i32 = scissor_y + scroll_y;
 
             const position = utils.init(scissor_stack_x, scroll_area_y, column_width, scroll_area_heigth);
-            _ = rg.guiScrollPanel(position, "Effect Stack", utils.init(0, 0, column_width, stack_height), &appliedScrollOffset, &renderContent);
+            _ = rg.scrollPanel(position, "Effect Stack", utils.init(0, 0, column_width, stack_height), &appliedScrollOffset, &renderContent);
 
             rl.beginScissorMode(scissor_stack_x, scissor_y, stack_column_width, column_heigth);
             defer rl.endScissorMode();
@@ -190,7 +190,7 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
 
                 const button_rectangle = rl.Rectangle.init(@floatFromInt(stack_x), @floatFromInt(position_y), @floatFromInt(stack_column_width), button_height);
 
-                if (rg.guiButton(button_rectangle, text) != 0 and rl.checkCollisionPointRec(mouse_position, position)) {
+                if (rg.button(button_rectangle, text) and rl.checkCollisionPointRec(mouse_position, position)) {
                     _ = plug_state.applied_shaders.orderedRemove(i);
                 }
             }
@@ -205,7 +205,7 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
             const shader_x: i32 = scissor_shader_x + scroll_x;
             const shader_y: i32 = scissor_y + scroll_y;
             const position = utils.init(scissor_shader_x, scroll_area_y, column_width, scroll_area_heigth);
-            _ = rg.guiScrollPanel(position, "Available Effects", utils.init(0, 0, column_width, shaders_height), &shaderScrollOffset, &renderContent);
+            _ = rg.scrollPanel(position, "Available Effects", utils.init(0, 0, column_width, shaders_height), &shaderScrollOffset, &renderContent);
 
             rl.beginScissorMode(scissor_shader_x, scissor_y, shaders_column_width, column_heigth);
             defer rl.endScissorMode();
@@ -218,8 +218,8 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
                 const text = plug.AdaptString(shader.filename);
                 const button_rectangle = rl.Rectangle.init(@floatFromInt(shader_x), @floatFromInt(position_y), @floatFromInt(shaders_column_width), button_height);
 
-                if (rg.guiButton(button_rectangle, text) != 0 and rl.checkCollisionPointRec(mouse_position, position)) {
-                    plug_state.applied_shaders.append(shader) catch @panic("Bullshit");
+                if (rg.button(button_rectangle, text) and rl.checkCollisionPointRec(mouse_position, position)) {
+                    plug_state.applied_shaders.append(plug_state.allocator, shader) catch @panic("Bullshit");
                 }
             }
         }
@@ -371,7 +371,7 @@ var fpsBuffer: [100]u8 = [1]u8{0} ** 100;
 fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
     const fpsToText = std.fmt.bufPrintIntToSlice(&fpsBuffer, plug_state.settings.fps, 10, .lower, .{});
     const argv = [_][]const u8{ "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080", "-r", fpsToText, "-i", "-", "-i", plug_state.song.?.path, "-vf", "vflip", "-c:v", "libx264", "-b:v", "25000k", "-c:a", "aac", "-b:a", "200k", "output.mp4" };
-    var proc = std.process.Child.init(&argv, plug_state.allocator.*);
+    var proc = std.process.Child.init(&argv, plug_state.allocator);
     proc.stdin_behavior = .Pipe;
     proc.spawn() catch @panic("Failed ffmpeg launch");
 

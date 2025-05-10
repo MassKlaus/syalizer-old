@@ -8,20 +8,27 @@ pub fn build(b: *std.Build) void {
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
     // for restricting supported target set are available.
-    const target = b.standardTargetOptions(.{ .default_target = .{ .abi = .gnu } });
+    const target = b.standardTargetOptions(.{});
 
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-    const raylib_dep = b.dependency("raylib-zig", .{ .target = target, .optimize = optimize, .shared = false });
+
+    const raylib_dep = b.dependency("raylib_zig", .{
+        .target = target,
+        .optimize = optimize,
+        .shared = false,
+        .linux_display_backend = .X11,
+    });
 
     const raylib = raylib_dep.module("raylib"); // main raylib module
     const raygui = raylib_dep.module("raygui"); // raygui module
 
     const raylib_artifact = raylib_dep.artifact("raylib"); // raylib C library
-    raylib_artifact.defineCMacro("SUPPORT_FILEFORMAT_FLAC", null);
     b.installArtifact(raylib_artifact);
+
+    raylib_artifact.root_module.addCMacro("SUPPORT_FILEFORMAT_FLAC", "");
 
     const exe = b.addExecutable(.{
         .name = "syalizer",
