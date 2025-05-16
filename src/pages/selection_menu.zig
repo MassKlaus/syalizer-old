@@ -2,12 +2,13 @@ const std = @import("std");
 const rl = @import("raylib");
 const rg = @import("raygui");
 const plug = @import("../plug.zig");
+const utils = @import("../utils.zig");
 const PlugState = plug.PlugState;
 
 fn handleSelectionMenuInput(plug_state: *PlugState) void {
     if (rl.isKeyPressed(.r)) {
-        plug_state.UnloadSongList();
-        plug_state.LoadSongList() catch @panic("Massive Error");
+        plug_state.unloadSongList();
+        plug_state.loadSongList() catch @panic("Massive Error");
     }
 
     if (rl.isKeyPressed(.escape)) {
@@ -15,7 +16,7 @@ fn handleSelectionMenuInput(plug_state: *PlugState) void {
     }
 
     if (rl.isKeyPressed(.f8)) {
-        plug_state.NavigateTo(.Settings);
+        plug_state.navigateTo(.Settings);
     }
 }
 
@@ -58,14 +59,14 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
     for (plug_state.songs, 0..) |*song, i| {
         const index = @as(i32, @intCast(i));
         const position_y: i32 = base_y + button_height * index;
-        const text = plug.AdaptString(song.filename);
+        const text = utils.adaptString(song.filename);
 
         const button_rectangle = rl.Rectangle.init(@floatFromInt(base_x), @floatFromInt(position_y), @floatFromInt(max_width), button_height);
 
         if (rg.button(button_rectangle, text)) {
             plug_state.logInfo("Song \"{s}\" Selected.", .{song.path});
 
-            plug_state.NavigateTo(.Visualizer);
+            plug_state.navigateTo(.Visualizer);
 
             const music = rl.loadMusicStream(song.path) catch @panic("Failed to load the music file.");
 
@@ -73,9 +74,9 @@ pub fn RenderSelectionMenuPage(plug_state: *PlugState) void {
             plug_state.song = song;
             plug_state.pause = false;
             plug_state.music_volume = rl.getMasterVolume();
-            plug_state.ClearFFT();
+            plug_state.clearFFT();
 
-            rl.attachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
+            rl.attachAudioStreamProcessor(music.stream, plug.collectAudioSamples);
             rl.playMusicStream(music);
 
             std.debug.print("Music Frames: {}", .{music.frameCount});

@@ -32,7 +32,7 @@ To make your music visualizer really nice to use, consider adding these features
     - [ ] Add more complex shader settings that can be controller from the menu.
 
 - [ ] **Enhanced Beat Sync Effects:**
-    - [ ] Energy beat detection.
+    - [X] [Energy beat detection](https://archive.gamedev.net/archive/reference/programming/features/beatdetection/index.html).
     - [ ] Spectral beat detection.
     - [ ] Make visual elements react more precisely to audio beats.
     - [ ] Add options for different beat-reactive effects.
@@ -49,7 +49,7 @@ To make your music visualizer really nice to use, consider adding these features
     - [ ] Add playlist management features (add, remove, shuffle).
 
 - [ ] **Recording & Export:**
-    - [ ] Allow users to save visualizations as videos.
+    - [X] Allow users to save visualizations as videos.
     - [ ] Add options for video resolution and quality.
 
 - [ ] **VJ Mode:**
@@ -132,3 +132,7 @@ This document outlines the controls for the selection menu, as defined in the `h
 * **R:** Reload the song list.
 * **Escape:** Close the application.
 * **F8:** Navigate to the settings menu.
+
+
+# Extra resources for data
+BEAT DETECTION: https://www.parallelcube.com/2018/03/30/beat-detection-algorithm/ 

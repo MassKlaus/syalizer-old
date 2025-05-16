@@ -32,7 +32,7 @@ pub fn main() anyerror!void {
     rl.initAudioDevice();
     defer rl.closeAudioDevice();
 
-    state = PlugState.init(allocator, 12) catch @panic("State failed to initialize.");
+    state = PlugState.init(allocator, 16) catch @panic("State failed to initialize.");
     const state_ptr: *PlugState = &state;
 
     plug.plugInit(state_ptr);

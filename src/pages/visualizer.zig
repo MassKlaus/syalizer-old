@@ -18,10 +18,10 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
         if (plug_state.display_shader_UI) {
             plug_state.display_shader_UI = false;
         } else {
-            plug_state.ClearFFT();
+            plug_state.clearFFT();
             if (plug_state.music) |music| {
                 rl.stopMusicStream(music);
-                rl.detachAudioStreamProcessor(music.stream, plug.CollectAudioSamples);
+                rl.detachAudioStreamProcessor(music.stream, plug.collectAudioSamples);
                 rl.unloadMusicStream(music);
                 plug_state.music = null;
             }
@@ -50,7 +50,7 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
 
     if (rl.isKeyPressed(.r)) {
         // create a memory copy of the shader names and then apply them again
-        var list = std.ArrayList([]u8).initCapacity(plug_state.allocator, plug_state.applied_shaders.items.len) catch @panic("Missing memory");
+        var list = std.ArrayListUnmanaged([]u8).initCapacity(plug_state.allocator, plug_state.applied_shaders.items.len) catch @panic("Missing memory");
         defer {
             // free the copy strings
             for (list.items) |value| {
@@ -58,7 +58,7 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
             }
 
             // free the list
-            list.deinit();
+            list.deinit(plug_state.allocator);
         }
 
         // copy the selected shaders
@@ -71,13 +71,13 @@ fn handleVisualizerInput(plug_state: *PlugState) void {
         }
 
         // refresh the shaders
-        plug_state.UnloadShaders();
-        plug_state.LoadShaders() catch @panic("Massive Error");
+        plug_state.unloadShaders();
+        plug_state.loadShaders() catch @panic("Massive Error");
         plug_state.applied_shaders.clearRetainingCapacity();
 
         // apply shaders again
         for (list.items) |name| {
-            const adapted_string = plug.AdaptString(name);
+            const adapted_string = utils.adaptString(name);
             for (plug_state.shaders) |*shader| {
                 if (std.mem.eql(u8, shader.filename, adapted_string)) {
                     plug_state.applied_shaders.appendAssumeCapacity(shader);
@@ -152,7 +152,7 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
         rl.drawRectangle(offset_x, offset_y, width, height, plug_state.settings.back_color);
 
         rl.drawText("Applied Shader List", offset_x + 10, offset_y + 20, 16, plug_state.settings.front_color);
-        _ = rg.toggle(utils.init(offset_x + width - 100, offset_y + 10, 90, 50), "Enable", &plug_state.apply_shader_stack);
+        _ = rg.toggle(utils.initRectangle(offset_x + width - 100, offset_y + 10, 90, 50), "Enable", &plug_state.apply_shader_stack);
 
         const button_height: i32 = 200;
 
@@ -173,8 +173,8 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
             const stack_x: i32 = scissor_stack_x + scroll_x;
             const stack_y: i32 = scissor_y + scroll_y;
 
-            const position = utils.init(scissor_stack_x, scroll_area_y, column_width, scroll_area_heigth);
-            _ = rg.scrollPanel(position, "Effect Stack", utils.init(0, 0, column_width, stack_height), &appliedScrollOffset, &renderContent);
+            const position = utils.initRectangle(scissor_stack_x, scroll_area_y, column_width, scroll_area_heigth);
+            _ = rg.scrollPanel(position, "Effect Stack", utils.initRectangle(0, 0, column_width, stack_height), &appliedScrollOffset, &renderContent);
 
             rl.beginScissorMode(scissor_stack_x, scissor_y, stack_column_width, column_heigth);
             defer rl.endScissorMode();
@@ -186,7 +186,7 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
                 const shader = plug_state.applied_shaders.items[i];
                 const index = @as(i32, @intCast(i));
                 const position_y: i32 = stack_y + button_height * index;
-                const text = plug.AdaptString(shader.filename);
+                const text = utils.adaptString(shader.filename[0 .. shader.filename.len - 3]);
 
                 const button_rectangle = rl.Rectangle.init(@floatFromInt(stack_x), @floatFromInt(position_y), @floatFromInt(stack_column_width), button_height);
 
@@ -204,8 +204,8 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
             const scissor_shader_x: i32 = offset_x + column_width;
             const shader_x: i32 = scissor_shader_x + scroll_x;
             const shader_y: i32 = scissor_y + scroll_y;
-            const position = utils.init(scissor_shader_x, scroll_area_y, column_width, scroll_area_heigth);
-            _ = rg.scrollPanel(position, "Available Effects", utils.init(0, 0, column_width, shaders_height), &shaderScrollOffset, &renderContent);
+            const position = utils.initRectangle(scissor_shader_x, scroll_area_y, column_width, scroll_area_heigth);
+            _ = rg.scrollPanel(position, "Available Effects", utils.initRectangle(0, 0, column_width, shaders_height), &shaderScrollOffset, &renderContent);
 
             rl.beginScissorMode(scissor_shader_x, scissor_y, shaders_column_width, column_heigth);
             defer rl.endScissorMode();
@@ -215,7 +215,7 @@ pub fn RenderSettingDialog(plug_state: *PlugState, size: rl.Rectangle) void {
             for (plug_state.shaders, 0..) |*shader, i| {
                 const index = @as(i32, @intCast(i));
                 const position_y: i32 = shader_y + button_height * index;
-                const text = plug.AdaptString(shader.filename);
+                const text = utils.adaptString(shader.filename[0 .. shader.filename.len - 3]);
                 const button_rectangle = rl.Rectangle.init(@floatFromInt(shader_x), @floatFromInt(position_y), @floatFromInt(shaders_column_width), button_height);
 
                 if (rg.button(button_rectangle, text) and rl.checkCollisionPointRec(mouse_position, position)) {
@@ -232,9 +232,9 @@ pub fn RenderVisualizerPage(plug_state: *PlugState) void {
             const delta_time = rl.getFrameTime();
             const amp_data = plug.getAmplitudesToRender(plug_state, delta_time);
 
-            RenderVisualizerFrameToTexture(plug_state, &plug_state.render_texture, amp_data.amps, amp_data.max);
-            plug.ApplyShadersToTexture(plug_state, &plug_state.render_texture, &plug_state.shader_texture);
-            plug.PrintTextureToScreen(plug_state, &plug_state.shader_texture, RenderVisualizerInfo);
+            RenderVisualizerFrameToTexture(plug_state, &plug_state.render_texture, amp_data.amps, amp_data.max, delta_time);
+            plug.applyShadersToTexture(plug_state, &plug_state.render_texture, &plug_state.shader_texture);
+            plug.printTextureToScreen(plug_state, &plug_state.shader_texture, RenderVisualizerInfo);
         },
         .video => {
             RenderVisualizeVideoWithFFMPEG(plug_state);
@@ -290,7 +290,9 @@ fn CalculateCirclePointPositions(plug_state: *PlugState, bottom_points: []rl.Vec
     }
 }
 
-fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: *rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32) void {
+var beat_cooldown: f32 = 0;
+
+fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: *rl.RenderTexture, amplitudes: []const f32, max_amplitude: f32, delta_time: f32) void {
     const amount_of_points: usize = 50;
     const samples_per_point: usize = @divFloor(amplitudes.len, amount_of_points);
     const points_size = (amount_of_points + 1) * 2;
@@ -321,15 +323,10 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: *rl.Re
 
             var line_total: f32 = 0;
 
-            var stop = index + samples_per_point;
-
-            if (stop > amplitudes.len) {
-                stop = amplitudes.len;
-            }
+            const stop = @min(index + samples_per_point, amplitudes.len);
 
             for (index..stop) |value| {
-                const amplitude = amplitudes[value];
-                line_total += amplitude;
+                line_total += amplitudes[value];
             }
 
             const height: i32 = @intFromFloat(max_height * plug_state.amplify * 1 * ((line_total / @as(f32, @floatFromInt(samples_per_point)))) / max_amplitude);
@@ -357,12 +354,22 @@ fn RenderVisualizerFrameToTexture(plug_state: *PlugState, output_texture: *rl.Re
             rl.drawLineStrip(&top_points, plug_state.settings.front_color);
         }
 
-        // if (plug_state.is_a_beat) {
-        //     rl.drawCircle(0, 0, 200, plug_state.settings.front_color);
-        //     rl.drawCircle(output_texture.texture.width, 0, 200, plug_state.settings.front_color);
-        //     rl.drawCircle(output_texture.texture.width, output_texture.texture.height, 200, plug_state.settings.front_color);
-        //     rl.drawCircle(0, output_texture.texture.height, 200, plug_state.settings.front_color);
-        // }
+        if (beat_cooldown > 0) {
+            beat_cooldown -= delta_time;
+            rl.drawCircle(0, 0, 200, plug_state.settings.front_color);
+            rl.drawCircle(output_texture.texture.width, 0, 200, plug_state.settings.front_color);
+            rl.drawCircle(output_texture.texture.width, output_texture.texture.height, 200, plug_state.settings.front_color);
+            rl.drawCircle(0, output_texture.texture.height, 200, plug_state.settings.front_color);
+        } else for (plug_state.subbands[0..5]) |subband| {
+            if (subband.history.contains_beat) {
+                beat_cooldown = 0.2;
+                rl.drawCircle(0, 0, 200, plug_state.settings.front_color);
+                rl.drawCircle(output_texture.texture.width, 0, 200, plug_state.settings.front_color);
+                rl.drawCircle(output_texture.texture.width, output_texture.texture.height, 200, plug_state.settings.front_color);
+                rl.drawCircle(0, output_texture.texture.height, 200, plug_state.settings.front_color);
+                break;
+            }
+        }
     }
 }
 
@@ -375,8 +382,8 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
     proc.stdin_behavior = .Pipe;
     proc.spawn() catch @panic("Failed ffmpeg launch");
 
-    plug_state.ClearFFT();
-    defer plug_state.ClearFFT();
+    plug_state.clearFFT();
+    defer plug_state.clearFFT();
 
     const audio = rl.loadWave(plug_state.song.?.path) catch @panic("Failed to load wave");
     defer rl.unloadWave(audio);
@@ -413,13 +420,13 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
 
         const amp_data = plug.getAmplitudesToRender(plug_state, delta_time);
 
-        RenderVisualizerFrameToTexture(plug_state, &plug_state.render_texture, amp_data.amps, amp_data.max);
-        plug.ApplyShadersToTexture(plug_state, &plug_state.render_texture, &plug_state.shader_texture);
+        RenderVisualizerFrameToTexture(plug_state, &plug_state.render_texture, amp_data.amps, amp_data.max, delta_time);
+        plug.applyShadersToTexture(plug_state, &plug_state.render_texture, &plug_state.shader_texture);
 
         const image = rl.loadImageFromTexture(plug_state.shader_texture.texture) catch continue;
         defer rl.unloadImage(image);
 
-        plug.PrintTextureToScreen(plug_state, &plug_state.shader_texture, RenderVisualizerInfo);
+        plug.printTextureToScreen(plug_state, &plug_state.shader_texture, RenderVisualizerInfo);
 
         const pixels_raw: [*]const u8 = @ptrCast(@alignCast(image.data));
 
@@ -428,7 +435,7 @@ fn RenderVisualizeVideoWithFFMPEG(plug_state: *PlugState) void {
         _ = proc.stdin.?.write(pixels) catch @panic("Bad Pipe!");
 
         const sampled_frames = sample_buffer[processed_frames * audio.channels .. (processed_frames + frame_step) * audio.channels];
-        plug.CollectAudioSamplesZig(sampled_frames, audio.channels);
+        plug.collectAudioSamplesZig(sampled_frames, audio.channels);
 
         handleVisualizerInput(plug_state);
     }
@@ -458,12 +465,12 @@ fn RenderVisualizerInfo(plug_state: *PlugState) void {
 fn RenderVisualizerData(plug_state: *PlugState) void {
     if (plug_state.render_info) {
         const output = std.fmt.bufPrint(&plug.text_buffer, "Shaders: {}", .{plug_state.apply_shader_stack}) catch @panic("BAD");
-        const text = plug.AdaptString(output);
+        const text = utils.adaptString(output);
 
         rl.drawText(text, 10, 30, 16, plug_state.settings.front_color);
 
         const output_amp = std.fmt.bufPrint(&plug.text_buffer, "Amplitude: {d:.2}", .{plug_state.amplify}) catch @panic("BAD");
-        const text_amp = plug.AdaptString(output_amp);
+        const text_amp = utils.adaptString(output_amp);
 
         rl.drawText(text_amp, 10, 50, 16, plug_state.settings.front_color);
 
@@ -484,7 +491,7 @@ fn RenderVisualizerData(plug_state: *PlugState) void {
             plug_state.render_frame_counter += 1;
             const progress_percentage = plug_state.render_frame_counter * 100 / plug_state.render_total_frames;
             const output_text = std.fmt.bufPrint(&plug.text_buffer, "Rendering Video {d:.2}%", .{progress_percentage}) catch "Format Error! ";
-            const valid_output_text = plug.AdaptString(output_text);
+            const valid_output_text = utils.adaptString(output_text);
             rl.drawText(valid_output_text, 1720, 30, 16, plug_state.settings.front_color);
         }
 

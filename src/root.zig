@@ -24,12 +24,12 @@ pub const FT = struct {
     pub fn FFT(allocator: std.mem.Allocator, input: []Complex(f32)) ![]Complex(f32) {
         const output = try allocator.alloc(Complex(f32), input.len);
 
-        NoAllocFFT(output, input);
+        NoAllocFFT(input, output);
 
         return output;
     }
 
-    pub fn NoAllocFFT(output: []Complex(f32), input: []Complex(f32)) void {
+    pub fn NoAllocFFT(input: []Complex(f32), output: []Complex(f32)) void {
         for (0..input.len) |i| {
             output[i] = input[i];
         }
@@ -73,13 +73,13 @@ pub const FT = struct {
         }
     }
 
-    pub fn NoAllocDFT(amplitudes: []Complex(f32), input: []Complex(f32)) void {
-        const size_float = @as(f32, @floatFromInt(amplitudes.len));
+    pub fn NoAllocDFT(input: []Complex(f32), output: []Complex(f32)) void {
+        const size_float = @as(f32, @floatFromInt(output.len));
 
         // k is the frency we are studying
         for (0..input.len) |k| {
             const k_float: f32 = @floatFromInt(k);
-            amplitudes[k] = Complex(f32).init(0, 0);
+            output[k] = Complex(f32).init(0, 0);
 
             // t is the temporal offset in the list of inputs
             for (0..input.len) |t| {
@@ -87,7 +87,7 @@ pub const FT = struct {
                 const angle = std.math.complex.exp(Complex(f32).init(0, -2 * std.math.pi * k_float * t_float / size_float));
 
                 // multiply the input with the offset sin wave to see if it is within range of the wanted frequency
-                amplitudes[k] = amplitudes[k].add(input[t].mul(angle));
+                output[k] = output[k].add(input[t].mul(angle));
             }
         }
     }
@@ -95,7 +95,7 @@ pub const FT = struct {
     pub fn DFT(allocator: std.mem.Allocator, input: []Complex(f32)) !([]Complex(f32)) {
         const amplitudes = try allocator.alloc(Complex(f32), input.len);
 
-        NoAllocDFT(amplitudes, input);
+        NoAllocDFT(input, amplitudes);
 
         return amplitudes;
     }
@@ -123,20 +123,15 @@ test "testing fast fourier implementation" {
     const DFTamplitudes = try FT.DFT(testalloc, wave);
     defer testalloc.free(DFTamplitudes);
 
-    for (DFTamplitudes, 0..) |amplitude, i| {
-        std.debug.print("{:0>2}: {d: ^8.2} | {d: ^8.2}\n", .{ i, std.math.round(amplitude.re), std.math.round(amplitude.im) });
-    }
-
     const FFTamplitudes = try FT.FFT(testalloc, wave);
     defer testalloc.free(FFTamplitudes);
 
-    for (FFTamplitudes, DFTamplitudes, 0..) |FFTamplitude, DFTamplitude, i| {
+    for (FFTamplitudes, DFTamplitudes) |FFTamplitude, DFTamplitude| {
         const FFT_re = std.math.round(FFTamplitude.re);
         const FFT_im = std.math.round(FFTamplitude.im);
 
         const DFT_re = std.math.round(DFTamplitude.re);
         const DFT_im = std.math.round(DFTamplitude.im);
-        std.debug.print("{:0>2}: {d: ^8.2} | {d: ^8.2} || {d: ^8.2} | {d: ^8.2} \n", .{ i, std.math.round(FFTamplitude.re), std.math.round(FFTamplitude.im), std.math.round(DFTamplitude.re), std.math.round(DFTamplitude.im) });
 
         try testing.expect(FFT_re == DFT_re and FFT_im == DFT_im);
     }
